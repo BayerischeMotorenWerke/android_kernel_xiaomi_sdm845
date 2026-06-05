@@ -12,6 +12,11 @@
 #include <linux/memcontrol.h>
 #include <linux/highmem.h>
 
+extern int isolate_lru_page(struct page *page);
+extern void putback_lru_page(struct page *page);
+extern unsigned long reclaim_pages_from_list(struct list_head *page_list,
+					     struct vm_area_struct *vma);
+
 /*
  * The anon_vma heads a list of private "related" vmas, to scan if
  * an anonymous page pointing to this anon_vma needs to be unmapped:
@@ -38,16 +43,7 @@ struct anon_vma {
 	 */
 	atomic_t refcount;
 
-	/*
-	 * Count of child anon_vmas. Equals to the count of all anon_vmas that
-	 * have ->parent pointing to this one, including itself.
-	 *
-	 * This counter is used for making decision about reusing anon_vma
-	 * instead of forking new one. See comments in function anon_vma_clone.
-	 */
-	unsigned long num_children;
-	/* Count of VMAs whose ->anon_vma pointer points to this object. */
-	unsigned long num_active_vmas;
+	unsigned degree;		/* ANDROID: KABI preservation, DO NOT USE! */
 
 	struct anon_vma *parent;	/* Parent of this anon_vma */
 
@@ -62,6 +58,25 @@ struct anon_vma {
 
 	/* Interval tree of private "related" vmas */
 	struct rb_root_cached rb_root;
+
+	/*
+	 * ANDROID: KABI preservation, it's safe to put these at the end of this structure as it's
+	 * only passed by a pointer everywhere, the size and internal structures are local to the
+	 * core kernel.
+	 */
+#ifndef __GENKSYMS__
+	/*
+	 * Count of child anon_vmas. Equals to the count of all anon_vmas that
+	 * have ->parent pointing to this one, including itself.
+	 *
+	 * This counter is used for making decision about reusing anon_vma
+	 * instead of forking new one. See comments in function anon_vma_clone.
+	 */
+	unsigned long num_children;
+	/* Count of VMAs whose ->anon_vma pointer points to this object. */
+	unsigned long num_active_vmas;
+#endif
+
 };
 
 /*
@@ -199,7 +214,8 @@ static inline void page_dup_rmap(struct page *page, bool compound)
 int page_referenced(struct page *, int is_locked,
 			struct mem_cgroup *memcg, unsigned long *vm_flags);
 
-bool try_to_unmap(struct page *, enum ttu_flags flags);
+bool try_to_unmap(struct page *page, enum ttu_flags flags,
+				struct vm_area_struct *vma);
 
 /* Avoid racy checks */
 #define PVMW_SYNC		(1 << 0)
@@ -266,6 +282,7 @@ int page_mapped_in_vma(struct page *page, struct vm_area_struct *vma);
  */
 struct rmap_walk_control {
 	void *arg;
+	struct vm_area_struct *target_vma;
 	/*
 	 * Return false if page table scanning in rmap_walk should be stopped.
 	 * Otherwise, return true.
@@ -294,7 +311,7 @@ static inline int page_referenced(struct page *page, int is_locked,
 	return 0;
 }
 
-#define try_to_unmap(page, refs) false
+#define try_to_unmap(page, refs, vma) false
 
 static inline int page_mkclean(struct page *page)
 {

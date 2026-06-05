@@ -29,6 +29,7 @@
 #include <linux/icmpv6.h>
 #include <linux/mroute6.h>
 #include <linux/slab.h>
+#include <linux/indirect_call_wrapper.h>
 
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv6.h>
@@ -259,7 +260,8 @@ static struct sk_buff *ip6_rcv_core(struct sk_buff *skb, struct net_device *dev,
 	rcu_read_unlock();
 
 	/* Must drop socket now because of tproxy. */
-	skb_orphan(skb);
+	if (!skb_sk_is_prefetched(skb))
+		skb_orphan(skb);
 
 	return skb;
 err:
@@ -324,31 +326,32 @@ void ipv6_list_rcv(struct list_head *head, struct packet_type *pt,
 	ip6_sublist_rcv(&sublist, curr_dev, curr_net);
 }
 
+INDIRECT_CALLABLE_DECLARE(int udpv6_rcv(struct sk_buff *));
+INDIRECT_CALLABLE_DECLARE(int tcp_v6_rcv(struct sk_buff *));
+
 /*
  *	Deliver the packet to the host
  */
-
-
-static int ip6_input_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+void ip6_protocol_deliver_rcu(struct net *net, struct sk_buff *skb, int nexthdr,
+			      bool have_final)
 {
 	const struct inet6_protocol *ipprot;
 	struct inet6_dev *idev;
 	unsigned int nhoff;
-	int nexthdr;
 	bool raw;
-	bool have_final = false;
 
 	/*
 	 *	Parse extension headers
 	 */
 
-	rcu_read_lock();
 resubmit:
 	idev = ip6_dst_idev(skb_dst(skb));
-	if (!pskb_pull(skb, skb_transport_offset(skb)))
-		goto discard;
 	nhoff = IP6CB(skb)->nhoff;
-	nexthdr = skb_network_header(skb)[nhoff];
+	if (!have_final) {
+		if (!pskb_pull(skb, skb_transport_offset(skb)))
+			goto discard;
+		nexthdr = skb_network_header(skb)[nhoff];
+	}
 
 resubmit_final:
 	raw = raw6_local_deliver(skb, nexthdr);
@@ -389,7 +392,8 @@ resubmit_final:
 		    !xfrm6_policy_check(NULL, XFRM_POLICY_IN, skb))
 			goto discard;
 
-		ret = ipprot->handler(skb);
+		ret = INDIRECT_CALL_2(ipprot->handler, tcp_v6_rcv, udpv6_rcv,
+				      skb);
 		if (ret > 0) {
 			if (ipprot->flags & INET6_PROTO_FINAL) {
 				/* Not an extension header, most likely UDP
@@ -419,13 +423,19 @@ resubmit_final:
 			consume_skb(skb);
 		}
 	}
-	rcu_read_unlock();
-	return 0;
+	return;
 
 discard:
 	__IP6_INC_STATS(net, idev, IPSTATS_MIB_INDISCARDS);
-	rcu_read_unlock();
 	kfree_skb(skb);
+}
+
+static int ip6_input_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
+{
+	rcu_read_lock();
+	ip6_protocol_deliver_rcu(net, skb, 0, false);
+	rcu_read_unlock();
+
 	return 0;
 }
 

@@ -9,6 +9,7 @@
 #include <linux/hardirq.h>
 #include <linux/perf_event.h>
 #include <linux/tracepoint.h>
+#include <linux/coresight-stm.h>
 
 struct trace_array;
 struct trace_buffer;
@@ -216,7 +217,8 @@ void *trace_event_buffer_reserve(struct trace_event_buffer *fbuffer,
 				  struct trace_event_file *trace_file,
 				  unsigned long len);
 
-void trace_event_buffer_commit(struct trace_event_buffer *fbuffer);
+void trace_event_buffer_commit(struct trace_event_buffer *fbuffer,
+			       unsigned long len);
 
 enum {
 	TRACE_EVENT_FL_FILTERED_BIT,
@@ -471,7 +473,8 @@ void perf_event_detach_bpf_prog(struct perf_event *event);
 int perf_event_query_prog_array(struct perf_event *event, void __user *info);
 int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
 int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_prog *prog);
-struct bpf_raw_event_map *bpf_find_raw_tracepoint(const char *name);
+struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name);
+void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
 int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 			    u32 *fd_type, const char **buf,
 			    u64 *probe_offset, u64 *probe_addr);
@@ -502,9 +505,12 @@ static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf
 {
 	return -EOPNOTSUPP;
 }
-static inline struct bpf_raw_event_map *bpf_find_raw_tracepoint(const char *name)
+static inline struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 {
 	return NULL;
+}
+static inline void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
+{
 }
 static inline int bpf_get_perf_event_info(const struct perf_event *event,
 					  u32 *prog_id, u32 *fd_type,

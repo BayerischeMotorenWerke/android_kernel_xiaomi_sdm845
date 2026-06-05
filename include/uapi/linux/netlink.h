@@ -29,7 +29,7 @@
 #define NETLINK_RDMA		20
 #define NETLINK_CRYPTO		21	/* Crypto layer */
 #define NETLINK_SMC		22	/* SMC monitoring */
-
+#define NETLINK_SOCKEV		23	/* Socket Administrative Events */
 #define NETLINK_INET_DIAG	NETLINK_SOCK_DIAG
 
 #define MAX_LINKS 32		
@@ -156,6 +156,7 @@ enum nlmsgerr_attrs {
 #define NETLINK_LIST_MEMBERSHIPS	9
 #define NETLINK_CAP_ACK			10
 #define NETLINK_EXT_ACK			11
+#define NETLINK_GET_STRICT_CHK		12
 
 struct nl_pktinfo {
 	__u32	group;

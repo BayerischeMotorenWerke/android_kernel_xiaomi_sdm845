@@ -2,7 +2,7 @@
 menuconfig CRYPTO_HW
 	bool "Hardware crypto devices"
 	default y
-	---help---
+	help
 	  Say Y here to get to see options for hardware crypto devices and
 	  processors. This option alone does not add any kernel code.
 
@@ -312,7 +312,7 @@ config HW_RANDOM_PPC4XX
 	bool "PowerPC 4xx generic true random number generator support"
 	depends on CRYPTO_DEV_PPC4XX && HW_RANDOM
 	default y
-	---help---
+	help
 	 This option provides the kernel-side support for the TRNG hardware
 	 found in the security function of some PowerPC 4xx SoCs.
 
@@ -407,7 +407,7 @@ config CRYPTO_DEV_EXYNOS_RNG
 	depends on ARCH_EXYNOS || COMPILE_TEST
 	depends on HAS_IOMEM
 	select CRYPTO_RNG
-	---help---
+	help
 	  This driver provides kernel-side support through the
 	  cryptographic API for the pseudo random number generator hardware
 	  found on Exynos SoCs.
@@ -565,7 +565,7 @@ source "drivers/crypto/cavium/nitrox/Kconfig"
 config CRYPTO_DEV_CAVIUM_ZIP
 	tristate "Cavium ZIP driver"
 	depends on PCI && 64BIT && (ARM64 || COMPILE_TEST)
-	---help---
+	help
 	  Select this option if you want to enable compression/decompression
 	  acceleration on Cavium's ARM based SoCs
 
@@ -584,6 +584,48 @@ config CRYPTO_DEV_QCE
 	  This driver supports Qualcomm crypto engine accelerator
 	  hardware. To compile this driver as a module, choose M here. The
 	  module will be called qcrypto.
+
+config CRYPTO_DEV_QCOM_MSM_QCE
+	tristate "QTI Crypto Engine (QCE) module"
+	depends on ARCH_QCOM
+	help
+	  This driver supports QTI Crypto Engine accelerator hardware, which
+	  is present on SDM845, etc. This is the core crypto driver which adds
+	  CE5.0 functionalities. To compile this driver as a module, choose
+	  M here. The module will be called QCE50.
+
+config CRYPTO_DEV_QCRYPTO
+	tristate "QTI Crypto accelerator"
+	depends on ARCH_QCOM
+	select CRYPTO_DES
+	select CRYPTO_ALGAPI
+	select CRYPTO_AUTHENC
+	select CRYPTO_BLKCIPHER
+	help
+	  This driver supports QTI crypto acceleration
+	  for kernel clients. To compile this driver as a module,
+	  choose M here: the module will be called qcrypto. Please
+	  select Y here to enable.
+
+config CRYPTO_DEV_QCEDEV
+	tristate "QCEDEV Interface to CE module"
+	depends on ARCH_QCOM
+	help
+	  This driver supports QTI QCEDEV Crypto Engine 5.0.
+	  This exposes the interface to the QCE hardware accelerator
+	  via IOCTLs.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called qcedev.
+
+config CRYPTO_DEV_OTA_CRYPTO
+	tristate "OTA Crypto module"
+	depends on ARCH_QCOM
+	help
+	  This driver supports QTI OTA Crypto in the FSM9xxx.
+	  To compile this driver as a module, choose M here: the
+	  module will be called ota_crypto. Please select Y here
+	  to enable.
 
 config CRYPTO_DEV_QCOM_RNG
 	tristate "Qualcomm Random Number Generator Driver"
@@ -761,5 +803,15 @@ config CRYPTO_DEV_CCREE
 	  If unsure say Y.
 
 source "drivers/crypto/hisilicon/Kconfig"
+
+config CRYPTO_DEV_QCOM_ICE
+        tristate "Inline Crypto Module"
+        default n
+        depends on BLK_DEV_DM
+        help
+          This driver supports Inline Crypto Engine for QTI chipsets, MSM8994
+          and later, to accelerate crypto operations for storage needs.
+          To compile this driver as a module, choose M here: the
+          module will be called ice.
 
 endif # CRYPTO_HW

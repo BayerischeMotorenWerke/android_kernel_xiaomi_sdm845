@@ -18,6 +18,7 @@
 #include <linux/sched/mm.h>
 #include <linux/list.h>
 #include <linux/slab.h>
+#include <linux/kcov.h>
 #include <linux/ioctl.h>
 #include <linux/usb.h>
 #include <linux/usbdevice_fs.h>
@@ -67,6 +68,11 @@ static void hub_event(struct work_struct *work);
 
 /* synchronize hub-port add/remove and peering operations */
 DEFINE_MUTEX(usb_port_peer_mutex);
+
+static bool skip_extended_resume_delay = 1;
+module_param(skip_extended_resume_delay, bool, 0644);
+MODULE_PARM_DESC(skip_extended_resume_delay,
+		"removes extra delay added to finish bus resume");
 
 /* cycle leds on hubs that aren't blinking for attention */
 static bool blinkenlights;
@@ -124,6 +130,12 @@ static int usb_reset_and_verify_device(struct usb_device *udev);
 static int hub_port_disable(struct usb_hub *hub, int port1, int set_state);
 static bool hub_port_warm_reset_required(struct usb_hub *hub, int port1,
 		u16 portstatus);
+
+#if defined(CONFIG_MACH_XIAOMI_SDM845)
+unsigned int connected_usb_idVendor;
+unsigned int connected_usb_idProduct;
+unsigned int connected_usb_devnum = 0xff;
+#endif
 
 static inline char *portspeed(struct usb_hub *hub, int portstatus)
 {
@@ -668,6 +680,12 @@ void usb_kick_hub_wq(struct usb_device *hdev)
 	if (hub)
 		kick_hub_wq(hub);
 }
+
+void usb_flush_hub_wq(void)
+{
+	flush_workqueue(hub_wq);
+}
+EXPORT_SYMBOL(usb_flush_hub_wq);
 
 /*
  * Let the USB core know that a USB 3.0 device has sent a Function Wake Device
@@ -2228,6 +2246,16 @@ void usb_disconnect(struct usb_device **pdev)
 	dev_info(&udev->dev, "USB disconnect, device number %d\n",
 			udev->devnum);
 
+#if defined(CONFIG_MACH_XIAOMI_SDM845)
+	if (connected_usb_devnum == udev->devnum)
+	{
+		dev_info(&udev->dev, "xiaomi headset removed, devnum %d\n", udev->devnum);
+		connected_usb_idVendor = 0;
+		connected_usb_idProduct = 0;
+		connected_usb_devnum = 0xff;
+	}
+#endif
+
 	/*
 	 * Ensure that the pm runtime code knows that the USB device
 	 * is in the process of being disconnected.
@@ -2565,6 +2593,17 @@ int usb_new_device(struct usb_device *udev)
 	/* export the usbdev device-node for libusb */
 	udev->dev.devt = MKDEV(USB_DEVICE_MAJOR,
 			(((udev->bus->busnum-1) * 128) + (udev->devnum-1)));
+
+#if defined(CONFIG_MACH_XIAOMI_SDM845)
+	if ((0x2717 == le16_to_cpu(udev->descriptor.idVendor))
+			&&(0x3801 == le16_to_cpu(udev->descriptor.idProduct)))
+	{
+		connected_usb_idVendor = le16_to_cpu(udev->descriptor.idVendor);
+		connected_usb_idProduct = le16_to_cpu(udev->descriptor.idProduct);
+		connected_usb_devnum = udev->devnum;
+		dev_info(&udev->dev, "xiaomi headset identified, devnum %d\n", udev->devnum);
+	}
+#endif
 
 	/* Tell the world! */
 	announce_device(udev);
@@ -3612,7 +3651,10 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		/* drive resume for USB_RESUME_TIMEOUT msec */
 		dev_dbg(&udev->dev, "usb %sresume\n",
 				(PMSG_IS_AUTO(msg) ? "auto-" : ""));
-		msleep(USB_RESUME_TIMEOUT);
+		if (!skip_extended_resume_delay ||
+				udev->parent != udev->bus->root_hub)
+			usleep_range(USB_RESUME_TIMEOUT * 1000,
+					(USB_RESUME_TIMEOUT + 1) * 1000);
 
 		/* Virtual root hubs can trigger on GET_PORT_STATUS to
 		 * stop resume signaling.  Then finish the resume
@@ -3635,7 +3677,7 @@ int usb_port_resume(struct usb_device *udev, pm_message_t msg)
 		}
 
 		/* TRSMRCY = 10 msec */
-		msleep(10);
+		usleep_range(10000, 10500);
 	}
 
 	if (udev->persist_enabled)
@@ -4577,6 +4619,7 @@ static int hub_set_address(struct usb_device *udev, int devnum)
 	return retval;
 }
 
+#if !defined(CONFIG_MACH_XIAOMI_SDM845) /*disable USB 2.0 Link PM to fix long time usb storage recognition issue*/
 /*
  * There are reports of USB 3.0 devices that say they support USB 2.0 Link PM
  * when they're plugged into a USB 2.0 port, but they don't work when LPM is
@@ -4603,6 +4646,7 @@ static void hub_set_initial_usb2_lpm_policy(struct usb_device *udev)
 		usb_enable_usb2_hardware_lpm(udev);
 	}
 }
+#endif
 
 static int hub_enable_device(struct usb_device *udev)
 {
@@ -4964,7 +5008,9 @@ hub_port_init(struct usb_hub *hub, struct usb_device *udev, int port1,
 	/* notify HCD that we have a device connected and addressed */
 	if (hcd->driver->update_device)
 		hcd->driver->update_device(hcd, udev);
+#if !defined(CONFIG_MACH_XIAOMI_SDM845) /*disable USB 2.0 Link PM to fix long time usb storage recognition issue*/
 	hub_set_initial_usb2_lpm_policy(udev);
+#endif
 fail:
 	if (retval) {
 		hub_port_disable(hub, port1, 0);
@@ -5483,6 +5529,8 @@ static void hub_event(struct work_struct *work)
 	hub_dev = hub->intfdev;
 	intf = to_usb_interface(hub_dev);
 
+	kcov_remote_start_usb((u64)hdev->bus->busnum);
+
 	dev_dbg(hub_dev, "state %d ports %d chg %04x evt %04x\n",
 			hdev->state, hdev->maxchild,
 			/* NOTE: expects max 15 ports... */
@@ -5589,6 +5637,8 @@ out_hdev_lock:
 	/* Balance the stuff in kick_hub_wq() and allow autosuspend */
 	usb_autopm_put_interface(intf);
 	kref_put(&hub->kref, hub_release);
+
+	kcov_remote_stop();
 }
 
 static const struct usb_device_id hub_id_table[] = {
@@ -5967,11 +6017,6 @@ re_enumerate_no_bos:
  * the reset is over (using their post_reset method).
  *
  * Return: The same as for usb_reset_and_verify_device().
- * However, if a reset is already in progress (for instance, if a
- * driver doesn't have pre_reset() or post_reset() callbacks, and while
- * being unbound or re-bound during the ongoing reset its disconnect()
- * or probe() routine tries to perform a second, nested reset), the
- * routine returns -EINPROGRESS.
  *
  * Note:
  * The caller must own the device lock.  For example, it's safe to use
@@ -6004,10 +6049,6 @@ int usb_reset_device(struct usb_device *udev)
 		dev_dbg(&udev->dev, "%s for root hub!\n", __func__);
 		return -EISDIR;
 	}
-
-	if (udev->reset_in_progress)
-		return -EINPROGRESS;
-	udev->reset_in_progress = 1;
 
 	port_dev = hub->ports[udev->portnum - 1];
 
@@ -6073,7 +6114,6 @@ int usb_reset_device(struct usb_device *udev)
 
 	usb_autosuspend_device(udev);
 	memalloc_noio_restore(noio_flag);
-	udev->reset_in_progress = 0;
 	return ret;
 }
 EXPORT_SYMBOL_GPL(usb_reset_device);

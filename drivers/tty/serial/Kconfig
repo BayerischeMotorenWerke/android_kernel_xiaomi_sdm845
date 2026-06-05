@@ -34,7 +34,7 @@ config SERIAL_AMBA_PL010_CONSOLE
 	bool "Support for console on AMBA serial port"
 	depends on SERIAL_AMBA_PL010=y
 	select SERIAL_CORE_CONSOLE
-	---help---
+	help
 	  Say Y here if you wish to use an AMBA PrimeCell UART as the system
 	  console (the system console is the device which receives all kernel
 	  messages and warnings and which allows logins in single user mode).
@@ -62,7 +62,7 @@ config SERIAL_AMBA_PL011_CONSOLE
 	depends on SERIAL_AMBA_PL011=y
 	select SERIAL_CORE_CONSOLE
 	select SERIAL_EARLYCON
-	---help---
+	help
 	  Say Y here if you wish to use an AMBA PrimeCell UART as the system
 	  console (the system console is the device which receives all kernel
 	  messages and warnings and which allows logins in single user mode).
@@ -91,7 +91,7 @@ config SERIAL_SB1250_DUART
 	depends on SIBYTE_SB1xxx_SOC=y
 	select SERIAL_CORE
 	default y
-	---help---
+	help
 	  Support for the asynchronous serial interface (DUART) included in
 	  the BCM1250 and derived System-On-a-Chip (SOC) devices.  Note that
 	  the letter D in DUART stands for "dual", which is how the device
@@ -106,7 +106,7 @@ config SERIAL_SB1250_DUART_CONSOLE
 	depends on SERIAL_SB1250_DUART=y
 	select SERIAL_CORE_CONSOLE
 	default y
-	---help---
+	help
 	  If you say Y here, it will be possible to use a serial port as the
 	  system console (the system console is the device which receives all
 	  kernel messages and warnings and which allows logins in single user
@@ -349,7 +349,7 @@ config SERIAL_DZ
 	depends on MACH_DECSTATION && 32BIT
 	select SERIAL_CORE
 	default y
-	---help---
+	help
 	  DZ11-family serial controllers for DECstations and VAXstations,
 	  including the DC7085, M7814, and M7819.
 
@@ -358,7 +358,7 @@ config SERIAL_DZ_CONSOLE
 	depends on SERIAL_DZ=y
 	select SERIAL_CORE_CONSOLE
 	default y
-	---help---
+	help
 	  If you say Y here, it will be possible to use a serial port as the
 	  system console (the system console is the device which receives all
 	  kernel messages and warnings and which allows logins in single user
@@ -374,7 +374,7 @@ config SERIAL_ZS
 	depends on MACH_DECSTATION
 	select SERIAL_CORE
 	default y
-	---help---
+	help
 	  Support for the Zilog 85C350 serial communications controller used
 	  for serial ports in newer DECstation systems.  These include the
 	  DECsystem 5900 and all models of the DECstation and DECsystem 5000
@@ -388,7 +388,7 @@ config SERIAL_ZS_CONSOLE
 	depends on SERIAL_ZS=y
 	select SERIAL_CORE_CONSOLE
 	default y
-	---help---
+	help
 	  If you say Y here, it will be possible to use a serial port as the
 	  system console (the system console is the device which receives all
 	  kernel messages and warnings and which allows logins in single user
@@ -595,7 +595,7 @@ config SERIAL_MUX
 	depends on GSC
 	select SERIAL_CORE
 	default y
-	---help---
+	help
 	  Saying Y here will enable the hardware MUX serial driver for
 	  the Nova, K class systems and D class with a 'remote control card'.
 	  The hardware MUX is not 8250/16550 compatible therefore the
@@ -990,20 +990,56 @@ config SERIAL_MSM_CONSOLE
 	select SERIAL_CORE_CONSOLE
 	select SERIAL_EARLYCON
 
-config SERIAL_QCOM_GENI
-	tristate "QCOM on-chip GENI based serial port support"
-	depends on ARCH_QCOM || COMPILE_TEST
-	depends on QCOM_GENI_SE
+config SERIAL_MSM_GENI
+	tristate "MSM on-chip GENI HW based serial port support"
+	depends on ARCH_QCOM
 	select SERIAL_CORE
+	help
+	    Serial driver for Qualcomm Technologies Inc's GENI based QUPv3
+	    hardware.
+	    The driver supports console and High speed UART functions.
 
-config SERIAL_QCOM_GENI_CONSOLE
-	bool "QCOM GENI Serial Console support"
-	depends on SERIAL_QCOM_GENI=y
+config SERIAL_MSM_GENI_HALF_SAMPLING
+	bool "Changes clock divider which impacts sampling rate for QUP HW ver greater than 2.5.0"
+	help
+	  Clock divider value should be doubled for QUP hardware version
+	  greater than 2.5.0.
+	  As earlycon can't have HW version awareness, decision is taken
+	  based on the configuration.
+
+config SERIAL_MSM_GENI_EARLY_CONSOLE
+	bool "MSM on-chip GENI HW based early console support"
+	select SERIAL_MSM_GENI_HALF_SAMPLING
+	help
+	  Serial early console driver for Qualcomm Technologies Inc's GENI
+	  based QUP hardware.
+
+config SERIAL_MSM_GENI_CONSOLE
+	tristate "MSM on-chip GENI HW based console support"
+	depends on SERIAL_MSM_GENI=y
 	select SERIAL_CORE_CONSOLE
 	select SERIAL_EARLYCON
+
+config SERIAL_MSM_GENI_HALF_SAMPLING
+	bool "Changes clock divider which impacts sampling rate for QUP HW ver greater than 2.5.0"
+	depends on SERIAL_MSM_GENI
 	help
-	  Serial console driver for Qualcomm Technologies Inc's GENI based
-	  QUP hardware.
+	  Clock divider value should be doubled for QUP hardware version
+	  greater than 2.5.0.
+	  As earlycon can't have HW version awareness, decision is taken
+	  based on the configuration.
+
+config SERIAL_MSM_HS
+	tristate "MSM UART High Speed: Serial Driver"
+	depends on ARCH_QCOM
+	select SERIAL_CORE
+	help
+	  If you have a machine based on MSM family of SoCs, you
+	  can enable its onboard high speed serial port by enabling
+	  this option.
+
+	  Choose M here to compile it as a module. The module will be
+	  called msm_serial_hs.
 
 config SERIAL_VT8500
 	bool "VIA VT8500 on-chip serial port support"
@@ -1136,7 +1172,7 @@ config SERIAL_TIMBERDALE
 	tristate "Support for timberdale UART"
 	select SERIAL_CORE
 	depends on X86_32 || COMPILE_TEST
-	---help---
+	help
 	Add support for UART controller on timberdale.
 
 config SERIAL_BCM63XX
@@ -1165,7 +1201,7 @@ config SERIAL_GRLIB_GAISLER_APBUART
 	tristate "GRLIB APBUART serial support"
 	depends on OF && SPARC
 	select SERIAL_CORE
-	---help---
+	help
 	Add support for the GRLIB APBUART serial port.
 
 config SERIAL_GRLIB_GAISLER_APBUART_CONSOLE

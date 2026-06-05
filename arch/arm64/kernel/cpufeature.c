@@ -640,7 +640,7 @@ static int check_update_ftr_reg(u32 sys_id, int cpu, u64 val, u64 boot)
 	update_cpu_ftr_reg(regp, val);
 	if ((boot & regp->strict_mask) == (val & regp->strict_mask))
 		return 0;
-	pr_warn("SANITY CHECK: Unexpected variation in %s. Boot CPU: %#016llx, CPU%d: %#016llx\n",
+	pr_debug("SANITY CHECK: Unexpected variation in %s. Boot CPU: %#016llx, CPU%d: %#016llx\n",
 			regp->name, boot, cpu, val);
 	return 1;
 }
@@ -962,6 +962,7 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A57),
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A72),
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A73),
+		MIDR_ALL_VERSIONS(MIDR_KRYO5S),
 		MIDR_ALL_VERSIONS(MIDR_HISI_TSV110),
 		{ /* sentinel */ }
 	};
@@ -1016,7 +1017,7 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 }
 
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
-static void
+static void __nocfi
 kpti_install_ng_mappings(const struct arm64_cpu_capabilities *__unused)
 {
 	typedef void (kpti_remap_fn)(int, int, phys_addr_t);
@@ -1035,7 +1036,7 @@ kpti_install_ng_mappings(const struct arm64_cpu_capabilities *__unused)
 	if (kpti_applied)
 		return;
 
-	remap_fn = (void *)__pa_symbol(idmap_kpti_install_ng_mappings);
+	remap_fn = (void *)__pa_function(idmap_kpti_install_ng_mappings);
 
 	cpu_install_idmap();
 	remap_fn(cpu, num_online_cpus(), __pa_symbol(swapper_pg_dir));
@@ -1081,6 +1082,7 @@ static bool cpu_has_broken_dbm(void)
 	static const struct midr_range cpus[] = {
 #ifdef CONFIG_ARM64_ERRATUM_1024718
 		MIDR_ALL_VERSIONS(MIDR_CORTEX_A55),
+		MIDR_RANGE(MIDR_KRYO5S, 13, 14, 13, 14),
 #endif
 		{},
 	};
@@ -1166,7 +1168,7 @@ static int ssbs_emulation_handler(struct pt_regs *regs, u32 instr)
 	if (user_mode(regs))
 		return 1;
 
-	if (instr & BIT(CRm_shift))
+	if (instr & BIT(PSTATE_Imm_shift))
 		regs->pstate |= PSR_SSBS_BIT;
 	else
 		regs->pstate &= ~PSR_SSBS_BIT;
@@ -1176,8 +1178,8 @@ static int ssbs_emulation_handler(struct pt_regs *regs, u32 instr)
 }
 
 static struct undef_hook ssbs_emulation_hook = {
-	.instr_mask	= ~(1U << CRm_shift),
-	.instr_val	= 0xd500001f | REG_PSTATE_SSBS_IMM,
+	.instr_mask	= ~(1U << PSTATE_Imm_shift),
+	.instr_val	= 0xd500401f | PSTATE_SSBS,
 	.fn		= ssbs_emulation_handler,
 };
 
@@ -1245,7 +1247,7 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.cpu_enable = cpu_enable_pan,
 	},
 #endif /* CONFIG_ARM64_PAN */
-#if defined(CONFIG_AS_LSE) && defined(CONFIG_ARM64_LSE_ATOMICS)
+#ifdef CONFIG_ARM64_LSE_ATOMICS
 	{
 		.desc = "LSE atomic instructions",
 		.capability = ARM64_HAS_LSE_ATOMICS,
@@ -1256,7 +1258,7 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.sign = FTR_UNSIGNED,
 		.min_field_value = 2,
 	},
-#endif /* CONFIG_AS_LSE && CONFIG_ARM64_LSE_ATOMICS */
+#endif /* CONFIG_ARM64_LSE_ATOMICS */
 	{
 		.desc = "Software prefetching using PRFM",
 		.capability = ARM64_HAS_NO_HW_PREFETCH,

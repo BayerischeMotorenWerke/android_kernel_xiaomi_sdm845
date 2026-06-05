@@ -42,7 +42,7 @@ config ARM64_RANDOMIZE_TEXT_OFFSET
 config DEBUG_WX
 	bool "Warn on W+X mappings at boot"
 	select ARM64_PTDUMP_CORE
-	---help---
+	help
 	  Generate a warning if any W+X mappings are found at boot.
 
 	  This is useful for discovering cases where the kernel is leaving
@@ -92,5 +92,8 @@ config DEBUG_EFI
 config ARM64_RELOC_TEST
 	depends on m
 	tristate "Relocation testing module"
+
+config ARM64_STRICT_BREAK_BEFORE_MAKE
+	bool "Enforce strict break-before-make on page table updates "
 
 source "drivers/hwtracing/coresight/Kconfig"

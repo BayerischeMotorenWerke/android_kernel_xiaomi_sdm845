@@ -345,6 +345,7 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
 	raw_spin_unlock_irqrestore(&desc->lock, flags);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(__irq_set_affinity);
 
 int irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
 {
@@ -1244,8 +1245,7 @@ setup_irq_thread(struct irqaction *new, unsigned int irq, bool secondary)
 	 * the thread dies to avoid that the interrupt code
 	 * references an already freed task_struct.
 	 */
-	get_task_struct(t);
-	new->thread = t;
+	new->thread = get_task_struct(t);
 	/*
 	 * Tell the thread to set its affinity. This is
 	 * important for shared interrupt handlers as we do

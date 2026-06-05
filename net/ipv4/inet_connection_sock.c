@@ -360,6 +360,13 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	head = &hinfo->bhash[inet_bhashfn(net, port,
 					  hinfo->bhash_size)];
 	spin_lock_bh(&head->lock);
+
+	if (inet_is_local_reserved_port(net, snum) &&
+	    !sysctl_reserved_port_bind) {
+		ret = 1;
+		goto fail_unlock;
+	}
+
 	inet_bind_bucket_for_each(tb, &head->chain)
 		if (net_eq(ib_net(tb), net) && tb->port == port)
 			goto tb_found;
@@ -717,7 +724,7 @@ static bool __inet_csk_reqsk_queue_drop(struct sock *sk,
 {
 	bool unlinked = reqsk_queue_unlink(&inet_csk(sk)->icsk_accept_queue, req);
 
-	if (!from_timer && timer_delete_sync(&req->rsk_timer))
+	if (!from_timer && del_timer_sync(&req->rsk_timer))
 		reqsk_put(req);
 
 	if (unlinked) {
@@ -851,7 +858,6 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	if (newsk) {
 		struct inet_connection_sock *newicsk = inet_csk(newsk);
 
-		newsk->sk_wait_pending = 0;
 		inet_sk_set_state(newsk, TCP_SYN_RECV);
 		newicsk->icsk_bind_hash = NULL;
 
@@ -987,7 +993,7 @@ static void inet_child_forget(struct sock *sk, struct request_sock *req,
 	percpu_counter_inc(sk->sk_prot->orphan_count);
 
 	if (sk->sk_protocol == IPPROTO_TCP && tcp_rsk(req)->tfo_listener) {
-		BUG_ON(tcp_sk(child)->fastopen_rsk != req);
+		BUG_ON(rcu_access_pointer(tcp_sk(child)->fastopen_rsk) != req);
 		BUG_ON(sk != req->rsk_listener);
 
 		/* Paranoid, to prevent race condition if
@@ -996,7 +1002,7 @@ static void inet_child_forget(struct sock *sk, struct request_sock *req,
 		 * Also to satisfy an assertion in
 		 * tcp_v4_destroy_sock().
 		 */
-		tcp_sk(child)->fastopen_rsk = NULL;
+		RCU_INIT_POINTER(tcp_sk(child)->fastopen_rsk, NULL);
 	}
 	inet_csk_destroy_sock(child);
 }

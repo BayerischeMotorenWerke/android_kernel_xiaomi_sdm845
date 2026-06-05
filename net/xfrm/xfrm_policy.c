@@ -654,6 +654,8 @@ EXPORT_SYMBOL(xfrm_policy_hash_rebuild);
  * of an absolute inpredictability of ordering of rules. This will not pass. */
 static u32 xfrm_gen_index(struct net *net, int dir, u32 index)
 {
+	static u32 idx_generator;
+
 	for (;;) {
 		struct hlist_head *list;
 		struct xfrm_policy *p;
@@ -661,8 +663,8 @@ static u32 xfrm_gen_index(struct net *net, int dir, u32 index)
 		int found;
 
 		if (!index) {
-			idx = (net->xfrm.idx_generator | dir);
-			net->xfrm.idx_generator += 8;
+			idx = (idx_generator | dir);
+			idx_generator += 8;
 		} else {
 			idx = index;
 			index = 0;
@@ -1635,7 +1637,6 @@ static struct dst_entry *xfrm_bundle_create(struct xfrm_policy *policy,
 		xdst->xfrm_genid = xfrm[i]->genid;
 
 		dst1->obsolete = DST_OBSOLETE_FORCE_CHK;
-		dst1->flags |= DST_HOST;
 		dst1->lastuse = now;
 
 		dst1->input = dst_discard;
@@ -1917,7 +1918,7 @@ static struct xfrm_dst *xfrm_create_dummy_bundle(struct net *net,
 	dst_copy_metrics(dst1, dst);
 
 	dst1->obsolete = DST_OBSOLETE_FORCE_CHK;
-	dst1->flags |= DST_HOST | DST_XFRM_QUEUE;
+	dst1->flags |= DST_XFRM_QUEUE;
 	dst1->lastuse = jiffies;
 
 	dst1->input = dst_discard;
@@ -2207,7 +2208,7 @@ struct dst_entry *xfrm_lookup_route(struct net *net, struct dst_entry *dst_orig,
 					    flags | XFRM_LOOKUP_QUEUE |
 					    XFRM_LOOKUP_KEEP_DST_REF);
 
-	if (IS_ERR(dst) && PTR_ERR(dst) == -EREMOTE)
+	if (PTR_ERR(dst) == -EREMOTE)
 		return make_blackhole(net, dst_orig->ops->family, dst_orig);
 
 	if (IS_ERR(dst))
@@ -2727,7 +2728,7 @@ int xfrm_policy_register_afinfo(const struct xfrm_policy_afinfo *afinfo, int fam
 		if (likely(dst_ops->mtu == NULL))
 			dst_ops->mtu = xfrm_mtu;
 		if (likely(dst_ops->negative_advice == NULL))
-			dst_ops->negative_advice = xfrm_negative_advice;
+			dst_ops->negative_advice = (android_dst_ops_negative_advice_old_t)xfrm_negative_advice;
 		if (likely(dst_ops->link_failure == NULL))
 			dst_ops->link_failure = xfrm_link_failure;
 		if (likely(dst_ops->neigh_lookup == NULL))

@@ -1736,23 +1736,12 @@ static int __init initialize_ptr_random(void)
 }
 early_initcall(initialize_ptr_random);
 
-/* Maps a pointer to a 32 bit unique identifier. */
-static char *ptr_to_id(char *buf, char *end, void *ptr, struct printf_spec spec)
+static inline int __ptr_to_hashval(const void *ptr, unsigned long *hashval_out)
 {
-	const char *str = sizeof(ptr) == 8 ? "(____ptrval____)" : "(ptrval)";
 	unsigned long hashval;
 
-	/* When debugging early boot use non-cryptographically secure hash. */
-	if (unlikely(debug_boot_weak_hash)) {
-		hashval = hash_long((unsigned long)ptr, 32);
-		return pointer_string(buf, end, (const void *)hashval, spec);
-	}
-
-	if (static_branch_unlikely(&not_filled_random_ptr_key)) {
-		spec.field_width = 2 * sizeof(ptr);
-		/* string length must be less than default_width */
-		return string(buf, end, str, spec);
-	}
+	if (static_branch_unlikely(&not_filled_random_ptr_key))
+		return -EAGAIN;
 
 #ifdef CONFIG_64BIT
 	hashval = (unsigned long)siphash_1u64((u64)ptr, &ptr_key);
@@ -1764,8 +1753,63 @@ static char *ptr_to_id(char *buf, char *end, void *ptr, struct printf_spec spec)
 #else
 	hashval = (unsigned long)siphash_1u32((u32)ptr, &ptr_key);
 #endif
+	*hashval_out = hashval;
+	return 0;
+}
+
+int ptr_to_hashval(const void *ptr, unsigned long *hashval_out)
+{
+	return __ptr_to_hashval(ptr, hashval_out);
+}
+
+/* Maps a pointer to a 32 bit unique identifier. */
+static char *ptr_to_id(char *buf, char *end, void *ptr, struct printf_spec spec)
+{
+	const char *str = sizeof(ptr) == 8 ? "(____ptrval____)" : "(ptrval)";
+	unsigned long hashval;
+	int ret;
+
+	/* When debugging early boot use non-cryptographically secure hash. */
+	if (unlikely(debug_boot_weak_hash)) {
+		hashval = hash_long((unsigned long)ptr, 32);
+		return pointer_string(buf, end, (const void *)hashval, spec);
+	}
+
+	ret = __ptr_to_hashval(ptr, &hashval);
+	if (ret) {
+		spec.field_width = 2 * sizeof(ptr);
+		/* string length must be less than default_width */
+		return string(buf, end, str, spec);
+	}
+
 	return pointer_string(buf, end, (const void *)hashval, spec);
 }
+
+/* Disable pointer hashing if requested */
+bool no_hash_pointers __ro_after_init;
+EXPORT_SYMBOL_GPL(no_hash_pointers);
+
+static int __init no_hash_pointers_enable(char *str)
+{
+	no_hash_pointers = true;
+
+	pr_warn("**********************************************************\n");
+	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
+	pr_warn("**                                                      **\n");
+	pr_warn("** This system shows unhashed kernel memory addresses   **\n");
+	pr_warn("** via the console, logs, and other interfaces. This    **\n");
+	pr_warn("** might reduce the security of your system.            **\n");
+	pr_warn("**                                                      **\n");
+	pr_warn("** If you see this message and you are not debugging    **\n");
+	pr_warn("** the kernel, report this immediately to your system   **\n");
+	pr_warn("** administrator!                                       **\n");
+	pr_warn("**                                                      **\n");
+	pr_warn("**   NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE NOTICE   **\n");
+	pr_warn("**********************************************************\n");
+
+	return 0;
+}
+early_param("no_hash_pointers", no_hash_pointers_enable);
 
 /*
  * Show a '%p' thing.  A kernel extension is that the '%p' is followed
@@ -1873,6 +1917,10 @@ static char *ptr_to_id(char *buf, char *end, void *ptr, struct printf_spec spec)
  *                        C full compatible string
  *
  * - 'x' For printing the address. Equivalent to "%lx".
+ * - '[ku]s' For a BPF/tracing related format specifier, e.g. used out of
+ *           bpf_trace_printk() where [ku] prefix specifies either kernel (k)
+ *           or user (u) memory to probe, and:
+ *              s a string, equivalent to "%s" on direct vsnprintf() use
  *
  * ** When making changes please also update:
  *	Documentation/core-api/printk-formats.rst
@@ -1968,7 +2016,8 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
 			return buf;
 		}
 	case 'K':
-		if (!kptr_restrict)
+		if (!kptr_restrict ||
+		    IS_ENABLED(CONFIG_DEBUG_CONSOLE_UNHASHED_POINTERS))
 			break;
 		return restricted_pointer(buf, end, ptr, spec);
 	case 'N':
@@ -1998,10 +2047,25 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
 		break;
 	case 'x':
 		return pointer_string(buf, end, ptr, spec);
+	case 'u':
+	case 'k':
+		switch (fmt[1]) {
+		case 's':
+			return string(buf, end, ptr, spec);
+		}
 	}
 
-	/* default is to _not_ leak addresses, hash before printing */
-	return ptr_to_id(buf, end, ptr, spec);
+	if (IS_ENABLED(CONFIG_DEBUG_CONSOLE_UNHASHED_POINTERS))
+		return pointer_string(buf, end, ptr, spec);
+
+	/*
+	 * default is to _not_ leak addresses, so hash before printing,
+	 * unless no_hash_pointers is specified on the command line.
+	 */
+	if (unlikely(no_hash_pointers))
+		return pointer_string(buf, end, ptr, spec);
+	else
+		return ptr_to_id(buf, end, ptr, spec);
 }
 
 /*

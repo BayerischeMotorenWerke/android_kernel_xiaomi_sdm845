@@ -9,6 +9,7 @@
 #include <linux/cache.h>
 
 extern const char linux_banner[];
+extern const char *linux_banner_ptr;
 extern const char linux_proc_banner[];
 
 #define PRINTK_MAX_SINGLE_HEADER_LEN 2
@@ -193,7 +194,7 @@ extern int printk_delay_msec;
 extern int dmesg_restrict;
 
 extern int
-devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write, void __user *buf,
+devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write, void *buf,
 			  size_t *lenp, loff_t *ppos);
 
 extern void wake_up_klogd(void);

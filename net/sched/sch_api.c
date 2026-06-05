@@ -486,7 +486,8 @@ static struct qdisc_size_table *qdisc_get_stab(struct nlattr *opt,
 	u16 *tab = NULL;
 	int err;
 
-	err = nla_parse_nested(tb, TCA_STAB_MAX, opt, stab_policy, extack);
+	err = nla_parse_nested_deprecated(tb, TCA_STAB_MAX, opt, stab_policy,
+					  extack);
 	if (err < 0)
 		return ERR_PTR(err);
 	if (!tb[TCA_STAB_BASE]) {
@@ -1358,8 +1359,8 @@ static int tc_get_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(n, sizeof(*tcm), tca, TCA_MAX,
+				     rtm_tca_policy, extack);
 	if (err < 0)
 		return err;
 
@@ -1445,6 +1446,40 @@ static bool req_change(struct nlmsghdr *n)
 }
 
 /*
+ * enable/disable flow on qdisc.
+ */
+int
+tc_qdisc_flow_control(struct net_device *dev, u32 tcm_handle, int enable_flow)
+{
+	struct Qdisc *q;
+	int qdisc_len = 0;
+	struct __qdisc_change_req {
+		struct nlattr attr;
+		struct tc_prio_qopt data;
+	} req =	{
+		.attr = {sizeof(struct __qdisc_change_req), TCA_OPTIONS},
+		.data = {3, {1, 2, 2, 2, 1, 2, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1}, 1}
+		};
+
+	/* override flow bit */
+	req.data.enable_flow = enable_flow;
+
+	/* look up using tcm handle */
+	q = qdisc_lookup(dev, tcm_handle);
+
+	/* call registered change function */
+	if (likely(q && q->ops)) {
+		if (likely(q->ops->change)) {
+			qdisc_len = q->q.qlen;
+			if (q->ops->change(q, &req.attr, NULL))
+				pr_err("%s(): qdisc change failed\n", __func__);
+		}
+	}
+	return qdisc_len;
+}
+EXPORT_SYMBOL(tc_qdisc_flow_control);
+
+/*
  * Create/change qdisc.
  */
 static int tc_modify_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
@@ -1463,8 +1498,8 @@ static int tc_modify_qdisc(struct sk_buff *skb, struct nlmsghdr *n,
 
 replay:
 	/* Reinit, just in case something touches this. */
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(n, sizeof(*tcm), tca, TCA_MAX,
+				     rtm_tca_policy, extack);
 	if (err < 0)
 		return err;
 
@@ -1722,8 +1757,8 @@ static int tc_dump_qdisc(struct sk_buff *skb, struct netlink_callback *cb)
 	idx = 0;
 	ASSERT_RTNL();
 
-	err = nlmsg_parse(nlh, sizeof(struct tcmsg), tca, TCA_MAX,
-			  rtm_tca_policy, NULL);
+	err = nlmsg_parse_deprecated(nlh, sizeof(struct tcmsg), tca, TCA_MAX,
+				     rtm_tca_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -1946,8 +1981,8 @@ static int tc_ctl_tclass(struct sk_buff *skb, struct nlmsghdr *n,
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
 
-	err = nlmsg_parse(n, sizeof(*tcm), tca, TCA_MAX, rtm_tca_policy,
-			  extack);
+	err = nlmsg_parse_deprecated(n, sizeof(*tcm), tca, TCA_MAX,
+				     rtm_tca_policy, extack);
 	if (err < 0)
 		return err;
 

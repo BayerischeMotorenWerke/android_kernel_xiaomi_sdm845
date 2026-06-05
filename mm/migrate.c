@@ -240,7 +240,7 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 		 */
 		entry = pte_to_swp_entry(*pvmw.pte);
 		if (is_write_migration_entry(entry))
-			pte = maybe_mkwrite(pte, vma);
+			pte = maybe_mkwrite(pte, vma->vm_flags);
 
 		if (unlikely(is_zone_device_page(new))) {
 			if (is_device_private_page(new)) {
@@ -325,16 +325,13 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 
 	/*
 	 * Once radix-tree replacement of page migration started, page_count
-	 * *must* be zero. And, we don't want to call wait_on_page_locked()
-	 * against a page without get_page().
-	 * So, we use get_page_unless_zero(), here. Even failed, page fault
-	 * will occur again.
+	 * is zero; but we must not call put_and_wait_on_page_locked() without
+	 * a ref. Use get_page_unless_zero(), and just fault again if it fails.
 	 */
 	if (!get_page_unless_zero(page))
 		goto out;
 	pte_unmap_unlock(ptep, ptl);
-	wait_on_page_locked(page);
-	put_page(page);
+	put_and_wait_on_page_locked(page);
 	return;
 out:
 	pte_unmap_unlock(ptep, ptl);
@@ -368,8 +365,7 @@ void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd)
 	if (!get_page_unless_zero(page))
 		goto unlock;
 	spin_unlock(ptl);
-	wait_on_page_locked(page);
-	put_page(page);
+	put_and_wait_on_page_locked(page);
 	return;
 unlock:
 	spin_unlock(ptl);
@@ -695,6 +691,8 @@ void migrate_page_states(struct page *newpage, struct page *page)
 		SetPageActive(newpage);
 	} else if (TestClearPageUnevictable(page))
 		SetPageUnevictable(newpage);
+	if (PageWorkingset(page))
+		SetPageWorkingset(newpage);
 	if (PageChecked(page))
 		SetPageChecked(newpage);
 	if (PageMappedToDisk(page))
@@ -909,7 +907,7 @@ static int fallback_migrate_page(struct address_space *mapping,
 	 */
 	if (page_has_private(page) &&
 	    !try_to_release_page(page, GFP_KERNEL))
-		return -EAGAIN;
+		return mode == MIGRATE_SYNC ? -EAGAIN : -EBUSY;
 
 	return migrate_page(mapping, newpage, page, mode);
 }
@@ -1112,7 +1110,7 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
 				page);
 		try_to_unmap(page,
-			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS, NULL);
 		page_was_mapped = 1;
 	}
 
@@ -1338,7 +1336,7 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 
 	if (page_mapped(hpage)) {
 		try_to_unmap(hpage,
-			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS, NULL);
 		page_was_mapped = 1;
 	}
 
@@ -1412,6 +1410,8 @@ int migrate_pages(struct list_head *from, new_page_t get_new_page,
 	struct page *page2;
 	int swapwrite = current->flags & PF_SWAPWRITE;
 	int rc;
+
+	trace_mm_migrate_pages_start(mode, reason);
 
 	if (!swapwrite)
 		current->flags |= PF_SWAPWRITE;
@@ -1534,7 +1534,7 @@ static int add_page_for_migration(struct mm_struct *mm, unsigned long addr,
 	unsigned int follflags;
 	int err;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	err = -EFAULT;
 	vma = find_vma(mm, addr);
 	if (!vma || addr < vma->vm_start || !vma_migratable(vma))
@@ -1587,7 +1587,7 @@ out_putpage:
 	 */
 	put_page(page);
 out:
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	return err;
 }
 
@@ -1618,7 +1618,7 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 			goto out_flush;
 		if (get_user(node, nodes + i))
 			goto out_flush;
-		addr = (unsigned long)p;
+		addr = (unsigned long)untagged_addr(p);
 
 		err = -ENODEV;
 		if (node < 0 || node >= MAX_NUMNODES)
@@ -1719,7 +1719,7 @@ static void do_pages_stat_array(struct mm_struct *mm, unsigned long nr_pages,
 {
 	unsigned long i;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 
 	for (i = 0; i < nr_pages; i++) {
 		unsigned long addr = (unsigned long)(*pages);
@@ -1746,7 +1746,7 @@ set_status:
 		status++;
 	}
 
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 }
 
 /*
@@ -2384,6 +2384,7 @@ next:
  */
 static void migrate_vma_collect(struct migrate_vma *migrate)
 {
+	struct mmu_notifier_range range;
 	struct mm_walk mm_walk = {
 		.pmd_entry = migrate_vma_collect_pmd,
 		.pte_hole = migrate_vma_collect_hole,
@@ -2392,13 +2393,12 @@ static void migrate_vma_collect(struct migrate_vma *migrate)
 		.private = migrate,
 	};
 
-	mmu_notifier_invalidate_range_start(mm_walk.mm,
-					    migrate->start,
-					    migrate->end);
+	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0, NULL, mm_walk.mm,
+				migrate->start,
+				migrate->end);
+	mmu_notifier_invalidate_range_start(&range);
 	walk_page_range(migrate->start, migrate->end, &mm_walk);
-	mmu_notifier_invalidate_range_end(mm_walk.mm,
-					  migrate->start,
-					  migrate->end);
+	mmu_notifier_invalidate_range_end(&range);
 
 	migrate->end = migrate->start + (migrate->npages << PAGE_SHIFT);
 }
@@ -2779,9 +2779,8 @@ static void migrate_vma_pages(struct migrate_vma *migrate)
 {
 	const unsigned long npages = migrate->npages;
 	const unsigned long start = migrate->start;
-	struct vm_area_struct *vma = migrate->vma;
-	struct mm_struct *mm = vma->vm_mm;
-	unsigned long addr, i, mmu_start;
+	struct mmu_notifier_range range;
+	unsigned long addr, i;
 	bool notified = false;
 
 	for (i = 0, addr = start; i < npages; addr += PAGE_SIZE, i++) {
@@ -2800,11 +2799,14 @@ static void migrate_vma_pages(struct migrate_vma *migrate)
 				continue;
 			}
 			if (!notified) {
-				mmu_start = addr;
 				notified = true;
-				mmu_notifier_invalidate_range_start(mm,
-								mmu_start,
-								migrate->end);
+
+				mmu_notifier_range_init(&range,
+							MMU_NOTIFY_UNMAP, 0,
+							NULL,
+							migrate->vma->vm_mm,
+							addr, migrate->end);
+				mmu_notifier_invalidate_range_start(&range);
 			}
 			migrate_vma_insert_page(migrate, addr, newpage,
 						&migrate->src[i],
@@ -2845,8 +2847,7 @@ static void migrate_vma_pages(struct migrate_vma *migrate)
 	 * did already call it.
 	 */
 	if (notified)
-		mmu_notifier_invalidate_range_only_end(mm, mmu_start,
-						       migrate->end);
+		mmu_notifier_invalidate_range_only_end(&range);
 }
 
 /*

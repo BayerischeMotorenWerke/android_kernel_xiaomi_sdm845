@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Red Hat, Inc.
  *
  * Author: Mikulas Patocka <mpatocka@redhat.com>
  *
  * Based on Chromium dm-verity driver (C) 2011 The Chromium OS Authors
- *
- * This file is released under the GPLv2.
  *
  * In the file "/sys/module/dm_verity/parameters/prefetch_cluster" you can set
  * default prefetch value. Data are read in "prefetch_cluster" chunks from the
@@ -251,8 +250,12 @@ out:
 	if (v->mode == DM_VERITY_MODE_LOGGING)
 		return 0;
 
-	if (v->mode == DM_VERITY_MODE_RESTART)
+	if (v->mode == DM_VERITY_MODE_RESTART) {
+#ifdef CONFIG_DM_VERITY_AVB
+		dm_verity_avb_error_handler();
+#endif
 		kernel_restart("dm-verity device corrupted");
+	}
 
 	return 1;
 }
@@ -601,6 +604,7 @@ static void verity_prefetch_io(struct work_struct *work)
 		container_of(work, struct dm_verity_prefetch_work, work);
 	struct dm_verity *v = pw->v;
 	int i;
+	sector_t prefetch_size;
 
 	for (i = v->levels - 2; i >= 0; i--) {
 		sector_t hash_block_start;
@@ -623,8 +627,14 @@ static void verity_prefetch_io(struct work_struct *work)
 				hash_block_end = v->hash_blocks - 1;
 		}
 no_prefetch_cluster:
+		// for emmc, it is more efficient to send bigger read
+		prefetch_size = max((sector_t)CONFIG_DM_VERITY_HASH_PREFETCH_MIN_SIZE,
+			hash_block_end - hash_block_start + 1);
+		if ((hash_block_start + prefetch_size) >= (v->hash_start + v->hash_blocks)) {
+			prefetch_size = hash_block_end - hash_block_start + 1;
+		}
 		dm_bufio_prefetch(v->bufio, hash_block_start,
-				  hash_block_end - hash_block_start + 1);
+				  prefetch_size);
 	}
 
 	kfree(pw);
@@ -651,7 +661,7 @@ static void verity_submit_prefetch(struct dm_verity *v, struct dm_verity_io *io)
  * Bio map function. It allocates dm_verity_io structure and bio vector and
  * fills them. Then it issues prefetches and the I/O.
  */
-static int verity_map(struct dm_target *ti, struct bio *bio)
+int verity_map(struct dm_target *ti, struct bio *bio)
 {
 	struct dm_verity *v = ti->private;
 	struct dm_verity_io *io;
@@ -696,7 +706,7 @@ static int verity_map(struct dm_target *ti, struct bio *bio)
 /*
  * Status: V (valid) or C (corruption found)
  */
-static void verity_status(struct dm_target *ti, status_type_t type,
+void verity_status(struct dm_target *ti, status_type_t type,
 			  unsigned status_flags, char *result, unsigned maxlen)
 {
 	struct dm_verity *v = ti->private;
@@ -760,7 +770,7 @@ static void verity_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int verity_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
+int verity_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
 {
 	struct dm_verity *v = ti->private;
 
@@ -772,7 +782,7 @@ static int verity_prepare_ioctl(struct dm_target *ti, struct block_device **bdev
 	return 0;
 }
 
-static int verity_iterate_devices(struct dm_target *ti,
+int verity_iterate_devices(struct dm_target *ti,
 				  iterate_devices_callout_fn fn, void *data)
 {
 	struct dm_verity *v = ti->private;
@@ -780,7 +790,7 @@ static int verity_iterate_devices(struct dm_target *ti,
 	return fn(ti, v->data_dev, v->data_start, ti->len, data);
 }
 
-static void verity_io_hints(struct dm_target *ti, struct queue_limits *limits)
+void verity_io_hints(struct dm_target *ti, struct queue_limits *limits)
 {
 	struct dm_verity *v = ti->private;
 
@@ -793,7 +803,7 @@ static void verity_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	blk_limits_io_min(limits, limits->logical_block_size);
 }
 
-static void verity_dtr(struct dm_target *ti)
+void verity_dtr(struct dm_target *ti)
 {
 	struct dm_verity *v = ti->private;
 
@@ -948,7 +958,7 @@ static int verity_parse_opt_args(struct dm_arg_set *as, struct dm_verity *v)
  *	<digest>
  *	<salt>		Hex string or "-" if no salt.
  */
-static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
+int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 {
 	struct dm_verity *v;
 	struct dm_arg_set as;
@@ -1061,6 +1071,15 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		v->tfm = NULL;
 		goto bad;
 	}
+
+	/*
+	 * dm-verity performance can vary greatly depending on which hash
+	 * algorithm implementation is used.  Help people debug performance
+	 * problems by logging the ->cra_driver_name.
+	 */
+	DMINFO("%s using implementation \"%s\"", v->alg_name,
+	       crypto_hash_alg_common(v->tfm)->base.cra_driver_name);
+
 	v->digest_size = crypto_ahash_digestsize(v->tfm);
 	if ((1 << v->hash_dev_block_bits) < v->digest_size * 2) {
 		ti->error = "Digest size too big";
@@ -1111,6 +1130,14 @@ static int verity_ctr(struct dm_target *ti, unsigned argc, char **argv)
 		if (r < 0)
 			goto bad;
 	}
+
+#ifdef CONFIG_DM_ANDROID_VERITY_AT_MOST_ONCE_DEFAULT_ENABLED
+	if (!v->validated_blocks) {
+		r = verity_alloc_most_once(v);
+		if (r)
+			goto bad;
+	}
+#endif
 
 	v->hash_per_block_bits =
 		__fls((1 << v->hash_dev_block_bits) / v->digest_size);

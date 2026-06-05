@@ -1388,25 +1388,6 @@ static inline int same_magic(const char *amagic, const char *bmagic,
 }
 #endif /* CONFIG_MODVERSIONS */
 
-static bool inherit_taint(struct module *mod, struct module *owner)
-{
-	if (!owner || !test_bit(TAINT_PROPRIETARY_MODULE, &owner->taints))
-		return true;
-
-	if (mod->using_gplonly_symbols) {
-		pr_err("%s: module using GPL-only symbols uses symbols from proprietary module %s.\n",
-			mod->name, owner->name);
-		return false;
-	}
-
-	if (!test_bit(TAINT_PROPRIETARY_MODULE, &mod->taints)) {
-		pr_warn("%s: module uses symbols from proprietary module %s, inheriting taint.\n",
-			mod->name, owner->name);
-		set_bit(TAINT_PROPRIETARY_MODULE, &mod->taints);
-	}
-	return true;
-}
-
 /* Resolve a symbol for this module.  I.e. if we find one, record usage. */
 static const struct kernel_symbol *resolve_symbol(struct module *mod,
 						  const struct load_info *info,
@@ -1430,14 +1411,6 @@ static const struct kernel_symbol *resolve_symbol(struct module *mod,
 			  !(mod->taints & (1 << TAINT_PROPRIETARY_MODULE)), true);
 	if (!sym)
 		goto unlock;
-
-	if (license == GPL_ONLY)
-		mod->using_gplonly_symbols = true;
-
-	if (!inherit_taint(mod, owner)) {
-		sym = NULL;
-		goto getname;
-	}
 
 	if (!check_version(info, name, mod, crc)) {
 		sym = ERR_PTR(-EINVAL);
@@ -2204,6 +2177,8 @@ void __weak module_arch_freeing_init(struct module *mod)
 {
 }
 
+static void cfi_cleanup(struct module *mod);
+
 /* Free a module, remove from lists, etc. */
 static void free_module(struct module *mod)
 {
@@ -2245,6 +2220,10 @@ static void free_module(struct module *mod)
 
 	/* This may be empty, but that's OK */
 	disable_ro_nx(&mod->init_layout);
+
+	/* Clean up CFI for the module. */
+	cfi_cleanup(mod);
+
 	module_arch_freeing_init(mod);
 	module_memfree(mod->init_layout.base);
 	kfree(mod->args);
@@ -2255,6 +2234,10 @@ static void free_module(struct module *mod)
 
 	/* Finally, free the core (containing the module structure) */
 	disable_ro_nx(&mod->core_layout);
+#ifdef CONFIG_DEBUG_MODULE_LOAD_INFO
+	pr_info("Unloaded %s: module core layout, start: 0x%pK size: 0x%x\n",
+		mod->name, mod->core_layout.base, mod->core_layout.size);
+#endif
 	module_memfree(mod->core_layout.base);
 }
 
@@ -2992,8 +2975,7 @@ static int copy_module_from_user(const void __user *umod, unsigned long len,
 		return err;
 
 	/* Suck in entire file: we'll want most of it. */
-	info->hdr = __vmalloc(info->len,
-			GFP_KERNEL | __GFP_NOWARN, PAGE_KERNEL);
+	info->hdr = __vmalloc(info->len, GFP_KERNEL | __GFP_NOWARN);
 	if (!info->hdr)
 		return -ENOMEM;
 
@@ -3200,6 +3182,11 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 	mod->tracepoints_ptrs = section_objs(info, "__tracepoints_ptrs",
 					     sizeof(*mod->tracepoints_ptrs),
 					     &mod->num_tracepoints);
+#endif
+#ifdef CONFIG_BPF_EVENTS
+	mod->bpf_raw_events = section_objs(info, "__bpf_raw_tp_map",
+					   sizeof(*mod->bpf_raw_events),
+					   &mod->num_bpf_raw_events);
 #endif
 #ifdef CONFIG_JUMP_LABEL
 	mod->jump_entries = section_objs(info, "__jump_table",
@@ -3459,6 +3446,8 @@ int __weak module_finalize(const Elf_Ehdr *hdr,
 	return 0;
 }
 
+static void cfi_init(struct module *mod);
+
 static int post_relocation(struct module *mod, const struct load_info *info)
 {
 	/* Sort exception table now relocations are done. */
@@ -3470,6 +3459,9 @@ static int post_relocation(struct module *mod, const struct load_info *info)
 
 	/* Setup kallsyms-specific fields. */
 	add_kallsyms(mod, info);
+
+	/* Setup CFI for the module. */
+	cfi_init(mod);
 
 	/* Arch-specific module finalizing. */
 	return module_finalize(info->hdr, info->sechdrs, mod);
@@ -4243,6 +4235,24 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 	return 0;
 }
 #endif /* CONFIG_KALLSYMS */
+
+static void cfi_init(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	rcu_read_lock_sched();
+	mod->cfi_check =
+		(cfi_check_fn)mod_find_symname(mod, CFI_CHECK_FN_NAME);
+	rcu_read_unlock_sched();
+	cfi_module_add(mod, module_addr_min, module_addr_max);
+#endif
+}
+
+static void cfi_cleanup(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	cfi_module_remove(mod, module_addr_min, module_addr_max);
+#endif
+}
 
 /* Maximum number of characters written by module_flags() */
 #define MODULE_FLAGS_BUF_SIZE (TAINT_FLAGS_COUNT + 4)

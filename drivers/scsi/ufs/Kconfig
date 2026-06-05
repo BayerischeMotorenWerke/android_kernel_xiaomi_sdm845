@@ -38,7 +38,7 @@ config SCSI_UFSHCD
 	select PM_DEVFREQ
 	select DEVFREQ_GOV_SIMPLE_ONDEMAND
 	select NLS
-	---help---
+	help
 	This selects the support for UFS devices in Linux, say Y and make
 	  sure that you know the name of your UFS host adapter (the card
 	  inside your computer that "speaks" the UFS protocol, also
@@ -53,7 +53,7 @@ config SCSI_UFSHCD
 config SCSI_UFSHCD_PCI
 	tristate "PCI bus based UFS Controller support"
 	depends on SCSI_UFSHCD && PCI
-	---help---
+	help
 	This selects the PCI UFS Host Controller Interface. Select this if
 	you have UFS Host Controller with PCI Interface.
 
@@ -64,7 +64,7 @@ config SCSI_UFSHCD_PCI
 config SCSI_UFS_DWC_TC_PCI
 	tristate "DesignWare pci support using a G210 Test Chip"
 	depends on SCSI_UFSHCD_PCI
-	---help---
+	help
 	  Synopsys Test Chip is a PHY for prototyping purposes.
 
 	  If unsure, say N.
@@ -72,7 +72,7 @@ config SCSI_UFS_DWC_TC_PCI
 config SCSI_UFSHCD_PLATFORM
 	tristate "Platform bus based UFS Controller support"
 	depends on SCSI_UFSHCD
-	---help---
+	help
 	This selects the UFS host controller support. Select this if
 	you have an UFS controller on Platform bus.
 
@@ -83,7 +83,7 @@ config SCSI_UFSHCD_PLATFORM
 config SCSI_UFS_DWC_TC_PLATFORM
 	tristate "DesignWare platform support using a G210 Test Chip"
 	depends on SCSI_UFSHCD_PLATFORM
-	---help---
+	help
 	  Synopsys Test Chip is a PHY for prototyping purposes.
 
 	  If unsure, say N.
@@ -101,11 +101,50 @@ config SCSI_UFS_QCOM
 	  Select this if you have UFS controller on QCOM chipset.
 	  If unsure, say N.
 
+config SCSI_UFS_TEST
+	tristate "Universal Flash Storage host controller driver unit-tests"
+	depends on SCSI_UFSHCD && IOSCHED_TEST
+	default m
+	help
+	  This adds UFS Host controller unit-test framework.
+	  The UFS unit-tests register as a block device test utility to
+	  the test-iosched and will be initiated when the test-iosched will
+	  be chosen to be the active I/O scheduler.
+
+config SCSI_UFSHCD_CMD_LOGGING
+	bool "Universal Flash Storage host controller driver layer command logging support"
+	depends on SCSI_UFSHCD
+	help
+	  This selects the UFS host controller driver layer command logging.
+	  UFS host controller driver layer command logging records all the
+	  command information sent from UFS host controller for debugging
+	  purpose.
+
+	  Select this if you want above mentioned debug information captured.
+	  If unsure, say N.
+
 config SCSI_UFS_HISI
 	tristate "Hisilicon specific hooks to UFS controller platform driver"
 	depends on (ARCH_HISI || COMPILE_TEST) && SCSI_UFSHCD_PLATFORM
-	---help---
+	help
 	  This selects the Hisilicon specific additions to UFSHCD platform driver.
 
 	  Select this if you have UFS controller on Hisilicon chipset.
 	  If unsure, say N.
+
+config SCSI_UFS_CRYPTO
+	bool "UFS Crypto Engine Support"
+	depends on SCSI_UFSHCD && BLK_INLINE_ENCRYPTION
+	help
+	  Enable Crypto Engine Support in UFS.
+	  Enabling this makes it possible for the kernel to use the crypto
+	  capabilities of the UFS device (if present) to perform crypto
+	  operations on data being transferred to/from the device.
+
+config SCSI_UFS_CRYPTO_QTI
+	tristate "Vendor specific UFS Crypto Engine Support"
+	depends on SCSI_UFS_CRYPTO
+	help
+	 Enable Vendor Crypto Engine Support in UFS
+	 Enabling this allows kernel to use UFS crypto operations defined
+	 and implemented by QTI.

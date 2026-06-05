@@ -70,6 +70,7 @@ struct eth_dev {
 	unsigned		qmult;
 
 	unsigned		header_len;
+	unsigned int		ul_max_pkts_per_xfer;
 	struct sk_buff		*(*wrap)(struct gether *, struct sk_buff *skb);
 	int			(*unwrap)(struct gether *,
 						struct sk_buff *skb,
@@ -82,6 +83,7 @@ struct eth_dev {
 
 	bool			zlp;
 	bool			no_skb_reserve;
+	bool			ifname_set;
 	u8			host_mac[ETH_ALEN];
 	u8			dev_mac[ETH_ALEN];
 };
@@ -181,10 +183,14 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 		size -= size % out->maxpacket;
 	}
 
+	if (dev->ul_max_pkts_per_xfer)
+		size *= dev->ul_max_pkts_per_xfer;
+
 	if (dev->port_usb->is_fixed)
 		size = max_t(size_t, size, dev->port_usb->fixed_out_len);
 	spin_unlock_irqrestore(&dev->lock, flags);
 
+	DBG(dev, "%s: size: %zd\n", __func__, size);
 	skb = __netdev_alloc_skb(dev->net, size + NET_IP_ALIGN, gfp_flags);
 	if (skb == NULL) {
 		DBG(dev, "no rx skb\n");
@@ -516,15 +522,15 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 		if (dev->port_usb)
 			skb = dev->wrap(dev->port_usb, skb);
 		spin_unlock_irqrestore(&dev->lock, flags);
-		if (!skb) {
-			/* Multi frame CDC protocols may store the frame for
-			 * later which is not a dropped frame.
-			 */
-			if (dev->port_usb &&
-					dev->port_usb->supports_multi_frame)
-				goto multiframe;
-			goto drop;
-		}
+	}
+	if (!skb) {
+		/* Multi frame CDC protocols may store the frame for
+		 * later which is not a dropped frame.
+		 */
+		if (dev->port_usb &&
+				dev->port_usb->supports_multi_frame)
+			goto multiframe;
+		goto drop;
 	}
 
 	length = skb->len;
@@ -976,14 +982,64 @@ EXPORT_SYMBOL_GPL(gether_get_qmult);
 
 int gether_get_ifname(struct net_device *net, char *name, int len)
 {
+	struct eth_dev *dev = netdev_priv(net);
 	int ret;
 
 	rtnl_lock();
-	ret = snprintf(name, len, "%s\n", netdev_name(net));
+	ret = scnprintf(name, len, "%s\n",
+			dev->ifname_set ? net->name : netdev_name(net));
 	rtnl_unlock();
-	return ret < len ? ret : len;
+	return ret;
 }
 EXPORT_SYMBOL_GPL(gether_get_ifname);
+
+int gether_set_ifname(struct net_device *net, const char *name, int len)
+{
+	struct eth_dev *dev = netdev_priv(net);
+	char tmp[IFNAMSIZ];
+	const char *p;
+
+	if (name[len - 1] == '\n')
+		len--;
+
+	if (len >= sizeof(tmp))
+		return -E2BIG;
+
+	strscpy(tmp, name, len + 1);
+	if (!dev_valid_name(tmp))
+		return -EINVAL;
+
+	/* Require exactly one %d, so binding will not fail with EEXIST. */
+	p = strchr(name, '%');
+	if (!p || p[1] != 'd' || strchr(p + 2, '%'))
+		return -EINVAL;
+
+	strncpy(net->name, tmp, sizeof(net->name));
+	dev->ifname_set = true;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(gether_set_ifname);
+
+unsigned int gether_get_ul_max_pkts_per_xfer(struct net_device *net)
+{
+	struct eth_dev *dev;
+
+	dev = netdev_priv(net);
+	return dev->ul_max_pkts_per_xfer;
+}
+EXPORT_SYMBOL(gether_get_ul_max_pkts_per_xfer);
+
+int gether_set_ul_max_pkts_per_xfer(struct net_device *net, unsigned int max)
+{
+	struct eth_dev *dev;
+
+	dev = netdev_priv(net);
+	dev->ul_max_pkts_per_xfer = max;
+
+	return 0;
+}
+EXPORT_SYMBOL(gether_set_ul_max_pkts_per_xfer);
 
 /**
  * gether_cleanup - remove Ethernet-over-USB device
@@ -1054,6 +1110,8 @@ struct net_device *gether_connect(struct gether *link)
 		dev->header_len = link->header_len;
 		dev->unwrap = link->unwrap;
 		dev->wrap = link->wrap;
+		if (!dev->ul_max_pkts_per_xfer)
+			dev->ul_max_pkts_per_xfer = link->ul_max_pkts_per_xfer;
 
 		spin_lock(&dev->lock);
 		dev->port_usb = link;

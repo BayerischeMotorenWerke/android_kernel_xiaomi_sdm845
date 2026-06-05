@@ -19,6 +19,7 @@
 #include <net/netns/packet.h>
 #include <net/netns/ipv4.h>
 #include <net/netns/ipv6.h>
+#include <net/netns/nexthop.h>
 #include <net/netns/ieee802154_6lowpan.h>
 #include <net/netns/sctp.h>
 #include <net/netns/dccp.h>
@@ -31,9 +32,12 @@
 #include <net/netns/xfrm.h>
 #include <net/netns/mpls.h>
 #include <net/netns/can.h>
+#include <net/netns/xdp.h>
+#include <net/netns/bpf.h>
 #include <linux/ns_common.h>
 #include <linux/idr.h>
 #include <linux/skbuff.h>
+#include <linux/notifier.h>
 
 struct user_namespace;
 struct proc_dir_entry;
@@ -43,6 +47,7 @@ struct ctl_table_header;
 struct net_generic;
 struct uevent_sock;
 struct netns_ipvs;
+struct bpf_prog;
 
 
 #define NETDEV_HASHBITS    8
@@ -58,7 +63,6 @@ struct net {
 	spinlock_t		rules_mod_lock;
 
 	u32			hash_mix;
-	atomic64_t		cookie_gen;
 
 	struct list_head	list;		/* list of network namespaces */
 	struct list_head	exit_list;	/* To linked to call pernet exit
@@ -91,6 +95,8 @@ struct net {
 	struct list_head 	dev_base_head;
 	struct hlist_head 	*dev_name_head;
 	struct hlist_head	*dev_index_head;
+	struct raw_notifier_head	netdev_chain;
+
 	unsigned int		dev_base_seq;	/* protected by rtnl_mutex */
 	int			ifindex;
 	unsigned int		dev_unreg_count;
@@ -106,6 +112,7 @@ struct net {
 	struct netns_mib	mib;
 	struct netns_packet	packet;
 	struct netns_unix	unx;
+	struct netns_nexthop	nexthop;
 	struct netns_ipv4	ipv4;
 #if IS_ENABLED(CONFIG_IPV6)
 	struct netns_ipv6	ipv6;
@@ -113,9 +120,7 @@ struct net {
 #if IS_ENABLED(CONFIG_IEEE802154_6LOWPAN)
 	struct netns_ieee802154_lowpan	ieee802154_lowpan;
 #endif
-#if defined(CONFIG_IP_SCTP) || defined(CONFIG_IP_SCTP_MODULE)
 	struct netns_sctp	sctp;
-#endif
 #if defined(CONFIG_IP_DCCP) || defined(CONFIG_IP_DCCP_MODULE)
 	struct netns_dccp	dccp;
 #endif
@@ -146,10 +151,16 @@ struct net {
 #endif
 	struct net_generic __rcu	*gen;
 
+	/* Used to store attached BPF programs */
+	struct netns_bpf	bpf;
+
 	/* Note : following structs are cache line aligned */
 #ifdef CONFIG_XFRM
 	struct netns_xfrm	xfrm;
 #endif
+
+	atomic64_t		net_cookie; /* written once */
+
 #if IS_ENABLED(CONFIG_IP_VS)
 	struct netns_ipvs	*ipvs;
 #endif
@@ -158,6 +169,9 @@ struct net {
 #endif
 #if IS_ENABLED(CONFIG_CAN)
 	struct netns_can	can;
+#endif
+#ifdef CONFIG_XDP_SOCKETS
+	struct netns_xdp	xdp;
 #endif
 	struct sock		*diag_nlsk;
 	atomic_t		fnhe_genid;
@@ -257,6 +271,8 @@ static inline int check_net(const struct net *net)
 
 void net_drop_ns(void *);
 
+u64 net_gen_cookie(struct net *net);
+
 #else
 
 static inline struct net *get_net(struct net *net)
@@ -282,6 +298,11 @@ int net_eq(const struct net *net1, const struct net *net2)
 static inline int check_net(const struct net *net)
 {
 	return 1;
+}
+
+static inline u64 net_gen_cookie(struct net *net)
+{
+	return 0;
 }
 
 #define net_drop_ns NULL
@@ -322,7 +343,8 @@ static inline struct net *read_pnet_rcu(const possible_net_t *pnet)
 /* Protected by net_rwsem */
 #define for_each_net(VAR)				\
 	list_for_each_entry(VAR, &net_namespace_list, list)
-
+#define for_each_net_continue_reverse(VAR)		\
+	list_for_each_entry_continue_reverse(VAR, &net_namespace_list, list)
 #define for_each_net_rcu(VAR)				\
 	list_for_each_entry_rcu(VAR, &net_namespace_list, list)
 

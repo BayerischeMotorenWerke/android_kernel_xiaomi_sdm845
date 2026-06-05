@@ -37,6 +37,7 @@ struct led_classdev {
 	const char		*name;
 	enum led_brightness	 brightness;
 	enum led_brightness	 max_brightness;
+	enum led_brightness	 usr_brightness_req;
 	int			 flags;
 
 	/* Lower 16 bits reflect status */
@@ -50,6 +51,7 @@ struct led_classdev {
 #define LED_PANIC_INDICATOR	BIT(20)
 #define LED_BRIGHT_HW_CHANGED	BIT(21)
 #define LED_RETAIN_AT_SHUTDOWN	BIT(22)
+#define LED_KEEP_TRIGGER	BIT(23)
 
 	/* set_brightness_work / blink_timer flags, atomic, private. */
 	unsigned long		work_flags;
@@ -138,6 +140,9 @@ extern void devm_led_classdev_unregister(struct device *parent,
 					 struct led_classdev *led_cdev);
 extern void led_classdev_suspend(struct led_classdev *led_cdev);
 extern void led_classdev_resume(struct led_classdev *led_cdev);
+#if defined(CONFIG_MACH_XIAOMI_SDM845)
+extern int spmi_wled_cabc(struct led_classdev *led_cdev, bool enable);
+#endif
 
 /**
  * led_blink_set - set blinking with software fallback

@@ -2466,7 +2466,7 @@ static int trace_module_notify(struct notifier_block *self,
 	mutex_unlock(&trace_types_lock);
 	mutex_unlock(&event_mutex);
 
-	return 0;
+	return NOTIFY_OK;
 }
 
 static struct notifier_block trace_module_nb = {
@@ -3429,7 +3429,7 @@ function_test_events_call(unsigned long ip, unsigned long parent_ip,
 	entry->parent_ip		= parent_ip;
 
 	event_trigger_unlock_commit(&event_trace_file, buffer, event,
-				    entry, flags, pc);
+				    entry, flags, pc, 0);
  out:
 	atomic_dec(&per_cpu(ftrace_test_event_disable, cpu));
 	preempt_enable_notrace();

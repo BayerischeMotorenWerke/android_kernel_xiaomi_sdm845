@@ -41,7 +41,7 @@ struct in_device {
 	unsigned long		mr_qri;		/* Query Response Interval */
 	unsigned char		mr_qrv;		/* Query Robustness Variable */
 	unsigned char		mr_gq_running;
-	u32			mr_ifc_count;
+	unsigned char		mr_ifc_count;
 	struct timer_list	mr_gq_timer;	/* general query timer */
 	struct timer_list	mr_ifc_timer;	/* interface change timer */
 
@@ -133,6 +133,8 @@ static inline void ipv4_devconf_setall(struct in_device *in_dev)
 #define IN_DEV_ARP_ANNOUNCE(in_dev)	IN_DEV_MAXCONF((in_dev), ARP_ANNOUNCE)
 #define IN_DEV_ARP_IGNORE(in_dev)	IN_DEV_MAXCONF((in_dev), ARP_IGNORE)
 #define IN_DEV_ARP_NOTIFY(in_dev)	IN_DEV_MAXCONF((in_dev), ARP_NOTIFY)
+#define IN_DEV_NF_IPV4_DEFRAG_SKIP(in_dev) \
+	IN_DEV_ORCONF((in_dev), NF_IPV4_DEFRAG_SKIP)
 
 struct in_ifaddr {
 	struct hlist_node	hash;
@@ -235,6 +237,20 @@ static inline struct in_device *in_dev_get(const struct net_device *dev)
 static inline struct in_device *__in_dev_get_rtnl(const struct net_device *dev)
 {
 	return rtnl_dereference(dev->ip_ptr);
+}
+
+/* called with rcu_read_lock or rtnl held */
+static inline bool ip_ignore_linkdown(const struct net_device *dev)
+{
+	struct in_device *in_dev;
+	bool rc = false;
+
+	in_dev = rcu_dereference_rtnl(dev->ip_ptr);
+	if (in_dev &&
+	    IN_DEV_IGNORE_ROUTES_WITH_LINKDOWN(in_dev))
+		rc = true;
+
+	return rc;
 }
 
 static inline struct neigh_parms *__in_dev_arp_parms_get_rcu(const struct net_device *dev)

@@ -82,6 +82,7 @@ void arch_cpu_idle_prepare(void)
 
 void arch_cpu_idle_enter(void)
 {
+	idle_notifier_call_chain(IDLE_START);
 	ledtrig_cpu(CPU_LED_IDLE_START);
 #ifdef CONFIG_PL310_ERRATA_769419
 	wmb();
@@ -90,6 +91,7 @@ void arch_cpu_idle_enter(void)
 
 void arch_cpu_idle_exit(void)
 {
+	idle_notifier_call_chain(IDLE_END);
 	ledtrig_cpu(CPU_LED_IDLE_END);
 }
 
@@ -433,7 +435,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 	npages = 1; /* for sigpage */
 	npages += vdso_total_pages;
 
-	if (down_write_killable(&mm->mmap_sem))
+	if (mmap_write_lock_killable(mm))
 		return -EINTR;
 	hint = sigpage_addr(mm, npages);
 	addr = get_unmapped_area(NULL, hint, npages << PAGE_SHIFT, 0, 0);
@@ -460,7 +462,7 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 	arm_install_vdso(mm, addr + PAGE_SIZE);
 
  up_fail:
-	up_write(&mm->mmap_sem);
+	mmap_write_unlock(mm);
 	return ret;
 }
 #endif

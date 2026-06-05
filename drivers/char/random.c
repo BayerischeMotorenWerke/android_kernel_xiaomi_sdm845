@@ -53,7 +53,7 @@
 #include <linux/uaccess.h>
 #include <linux/siphash.h>
 #include <linux/uio.h>
-#include <crypto/chacha20.h>
+#include <crypto/chacha.h>
 #include <crypto/blake2s.h>
 #include <asm/processor.h>
 #include <asm/irq.h>
@@ -432,7 +432,7 @@ static void _get_random_bytes(void *buf, size_t len)
  * wait_for_random_bytes() should be called and return 0 at least once
  * at any point prior.
  */
-void get_random_bytes(void *buf, size_t len)
+void get_random_bytes(void *buf, int len)
 {
 	warn_unseeded_randomness();
 	_get_random_bytes(buf, len);
@@ -799,16 +799,11 @@ early_param("random.trust_cpu", parse_trust_cpu);
 early_param("random.trust_bootloader", parse_trust_bootloader);
 
 /*
- * The first collection of entropy occurs at system boot while interrupts
- * are still turned off. Here we push in latent entropy, RDSEED, a timestamp,
- * utsname(), and the command line. Depending on the above configuration knob,
- * RDSEED may be considered sufficient for initialization. Note that much
- * earlier setup may already have pushed entropy into the input pool by the
- * time we get here.
+ * This is called extremely early, before time keeping functionality is
+ * available, but arch randomness is. Interrupts are not yet enabled.
  */
-int __init random_init(const char *command_line)
+void __init random_init_early(const char *command_line)
 {
-	ktime_t now = ktime_get_real();
 	unsigned int i, arch_bits;
 	unsigned long entropy;
 
@@ -821,22 +816,41 @@ int __init random_init(const char *command_line)
 	     i < BLAKE2S_BLOCK_SIZE; i += sizeof(entropy)) {
 		if (!arch_get_random_seed_long_early(&entropy) &&
 		    !arch_get_random_long_early(&entropy)) {
-			entropy = random_get_entropy();
 			arch_bits -= sizeof(entropy) * 8;
+			continue;
 		}
 		_mix_pool_bytes(&entropy, sizeof(entropy));
 	}
-	_mix_pool_bytes(&now, sizeof(now));
-	_mix_pool_bytes(utsname(), sizeof(*(utsname())));
-	_mix_pool_bytes(command_line, strlen(command_line));
-	add_latent_entropy();
 
+	_mix_pool_bytes(command_line, strlen(command_line));
+
+	/* Reseed if already seeded by earlier phases. */
 	if (crng_ready())
 		crng_reseed();
 	else if (trust_cpu)
 		_credit_init_bits(arch_bits);
+}
 
-	return 0;
+/*
+ * This is called a little bit after the prior function, and now there is
+ * access to timestamps counters. Interrupts are not yet enabled.
+ */
+void __init random_init(void)
+{
+	unsigned long entropy = random_get_entropy();
+	ktime_t now = ktime_get_real();
+
+	_mix_pool_bytes(utsname(), sizeof(*(utsname())));
+	_mix_pool_bytes(&now, sizeof(now));
+	_mix_pool_bytes(&entropy, sizeof(entropy));
+	add_latent_entropy();
+
+	/* Reseed if already seeded by earlier phases. */
+	if (crng_ready())
+		crng_reseed();
+
+	WARN(!entropy, "Missing cycle counter and fallback timer; RNG "
+		       "entropy collection will consequently suffer.");
 }
 
 /*
@@ -864,7 +878,7 @@ EXPORT_SYMBOL(add_device_randomness);
  * Those devices may produce endless random bits and will be throttled
  * when our pool is full.
  */
-void add_hwgenerator_randomness(const void *buf, size_t len, size_t entropy)
+void add_hwgenerator_randomness(const char *buf, size_t len, size_t entropy)
 {
 	mix_pool_bytes(buf, len);
 	credit_init_bits(entropy);
@@ -873,7 +887,8 @@ void add_hwgenerator_randomness(const void *buf, size_t len, size_t entropy)
 	 * Throttle writing to once every CRNG_RESEED_INTERVAL, unless
 	 * we're not yet initialized.
 	 */
-	if (!kthread_should_stop() && crng_ready())
+	if ((current->flags & PF_KTHREAD) &&
+	    !kthread_should_stop() && crng_ready())
 		schedule_timeout_interruptible(CRNG_RESEED_INTERVAL);
 }
 EXPORT_SYMBOL_GPL(add_hwgenerator_randomness);
@@ -1444,7 +1459,7 @@ static u8 sysctl_bootid[UUID_SIZE];
  * UUID. The difference is in whether table->data is NULL; if it is,
  * then a new UUID is generated and returned to the user.
  */
-static int proc_do_uuid(struct ctl_table *table, int write, void __user *buf,
+static int proc_do_uuid(struct ctl_table *table, int write, void *buf,
 			size_t *lenp, loff_t *ppos)
 {
 	u8 tmp_uuid[UUID_SIZE], *uuid;

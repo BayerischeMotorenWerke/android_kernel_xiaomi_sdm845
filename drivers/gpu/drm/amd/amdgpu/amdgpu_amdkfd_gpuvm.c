@@ -1182,7 +1182,7 @@ int amdgpu_amdkfd_gpuvm_alloc_memory_of_gpu(
 		alloc_flags = 0;
 		if (!offset || !*offset)
 			return -EINVAL;
-		user_addr = *offset;
+		user_addr = untagged_addr(*offset);
 	} else {
 		return -EINVAL;
 	}
@@ -1389,9 +1389,9 @@ int amdgpu_amdkfd_gpuvm_map_memory_to_gpu(
 	 * concurrently and the queues are actually stopped
 	 */
 	if (amdgpu_ttm_tt_get_usermm(bo->tbo.ttm)) {
-		down_write(&current->mm->mmap_sem);
+		mmap_write_lock(current->mm);
 		is_invalid_userptr = atomic_read(&mem->invalid);
-		up_write(&current->mm->mmap_sem);
+		mmap_write_unlock(current->mm);
 	}
 
 	mutex_lock(&mem->lock);

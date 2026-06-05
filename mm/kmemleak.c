@@ -109,6 +109,7 @@
 #include <linux/atomic.h>
 
 #include <linux/kasan.h>
+#include <linux/kfence.h>
 #include <linux/kmemleak.h>
 #include <linux/memory_hotplug.h>
 
@@ -226,8 +227,20 @@ static unsigned long jiffies_min_age;
 static unsigned long jiffies_last_scan;
 /* delay between automatic memory scannings */
 static signed long jiffies_scan_wait;
-/* enables or disables the task stacks scanning */
+
+/*
+ * Enables or disables the task stacks scanning.
+ * Set to 1 if at compile time we want it enabled.
+ * Else set to 0 to have it disabled by default.
+ * This can be enabled by writing to "stack=on" using
+ * kmemleak debugfs entry.
+ */
+#ifdef CONFIG_DEBUG_TASK_STACK_SCAN_OFF
+static int kmemleak_stack_scan;
+#else
 static int kmemleak_stack_scan = 1;
+#endif
+
 /* protects the memory scanning, parameters and debug/kmemleak file access */
 static DEFINE_MUTEX(scan_mutex);
 /* setting kmemleak=on, will set this var, skipping the disable */
@@ -565,7 +578,7 @@ static struct kmemleak_object *create_object(unsigned long ptr, size_t size,
 	atomic_set(&object->use_count, 1);
 	object->flags = OBJECT_ALLOCATED;
 	object->pointer = ptr;
-	object->size = size;
+	object->size = kfence_ksize((void *)ptr) ?: size;
 	object->excess_ref = 0;
 	object->min_count = min_count;
 	object->count = 0;			/* white color initially */

@@ -20,6 +20,7 @@
 #include <linux/ethtool.h>
 #include <net/arp.h>
 #include <net/ndisc.h>
+#include <net/ipv6_stubs.h>
 #include <net/ip.h>
 #include <net/icmp.h>
 #include <net/rtnetlink.h>
@@ -2761,10 +2762,10 @@ static void vxlan_raw_setup(struct net_device *dev)
 
 static const struct nla_policy vxlan_policy[IFLA_VXLAN_MAX + 1] = {
 	[IFLA_VXLAN_ID]		= { .type = NLA_U32 },
-	[IFLA_VXLAN_GROUP]	= { .len = FIELD_SIZEOF(struct iphdr, daddr) },
+	[IFLA_VXLAN_GROUP]	= { .len = sizeof_field(struct iphdr, daddr) },
 	[IFLA_VXLAN_GROUP6]	= { .len = sizeof(struct in6_addr) },
 	[IFLA_VXLAN_LINK]	= { .type = NLA_U32 },
-	[IFLA_VXLAN_LOCAL]	= { .len = FIELD_SIZEOF(struct iphdr, saddr) },
+	[IFLA_VXLAN_LOCAL]	= { .len = sizeof_field(struct iphdr, saddr) },
 	[IFLA_VXLAN_LOCAL6]	= { .len = sizeof(struct in6_addr) },
 	[IFLA_VXLAN_TOS]	= { .type = NLA_U8 },
 	[IFLA_VXLAN_TTL]	= { .type = NLA_U8 },
@@ -3736,7 +3737,7 @@ struct net_device *vxlan_dev_create(struct net *net, const char *name,
 	memset(&tb, 0, sizeof(tb));
 
 	dev = rtnl_create_link(net, name, name_assign_type,
-			       &vxlan_link_ops, tb);
+			       &vxlan_link_ops, tb, NULL);
 	if (IS_ERR(dev))
 		return dev;
 
@@ -3788,10 +3789,12 @@ static int vxlan_netdevice_event(struct notifier_block *unused,
 	struct vxlan_net *vn = net_generic(dev_net(dev), vxlan_net_id);
 
 	if (event == NETDEV_UNREGISTER) {
-		vxlan_offload_rx_ports(dev, false);
+		if (!dev->udp_tunnel_nic_info)
+			vxlan_offload_rx_ports(dev, false);
 		vxlan_handle_lowerdev_unregister(vn, dev);
 	} else if (event == NETDEV_REGISTER) {
-		vxlan_offload_rx_ports(dev, true);
+		if (!dev->udp_tunnel_nic_info)
+			vxlan_offload_rx_ports(dev, true);
 	} else if (event == NETDEV_UDP_TUNNEL_PUSH_INFO ||
 		   event == NETDEV_UDP_TUNNEL_DROP_INFO) {
 		vxlan_offload_rx_ports(dev, event == NETDEV_UDP_TUNNEL_PUSH_INFO);

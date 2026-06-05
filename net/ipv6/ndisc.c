@@ -198,6 +198,8 @@ static inline int ndisc_is_useropt(const struct net_device *dev,
 	return opt->nd_opt_type == ND_OPT_PREFIX_INFO ||
 		opt->nd_opt_type == ND_OPT_RDNSS ||
 		opt->nd_opt_type == ND_OPT_DNSSL ||
+		opt->nd_opt_type == ND_OPT_CAPTIVE_PORTAL ||
+		opt->nd_opt_type == ND_OPT_PREF64 ||
 		ndisc_ops_is_useropt(dev, opt->nd_opt_type);
 }
 
@@ -1284,8 +1286,8 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 	rt = rt6_get_dflt_router(net, &ipv6_hdr(skb)->saddr, skb->dev);
 
 	if (rt) {
-		neigh = ip6_neigh_lookup(&rt->fib6_nh.nh_gw,
-					 rt->fib6_nh.nh_dev, NULL,
+		neigh = ip6_neigh_lookup(&rt->fib6_nh.fib_nh_gw6,
+					 rt->fib6_nh.fib_nh_dev, NULL,
 					  &ipv6_hdr(skb)->saddr);
 		if (!neigh) {
 			ND_PRINTK(0, err,
@@ -1314,8 +1316,8 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 			return;
 		}
 
-		neigh = ip6_neigh_lookup(&rt->fib6_nh.nh_gw,
-					 rt->fib6_nh.nh_dev, NULL,
+		neigh = ip6_neigh_lookup(&rt->fib6_nh.fib_nh_gw6,
+					 rt->fib6_nh.fib_nh_dev, NULL,
 					  &ipv6_hdr(skb)->saddr);
 		if (!neigh) {
 			ND_PRINTK(0, err,
@@ -1827,7 +1829,8 @@ static void ndisc_warn_deprecated_sysctl(struct ctl_table *ctl,
 	}
 }
 
-int ndisc_ifinfo_sysctl_change(struct ctl_table *ctl, int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+int ndisc_ifinfo_sysctl_change(struct ctl_table *ctl, int write, void *buffer,
+		size_t *lenp, loff_t *ppos)
 {
 	struct net_device *dev = ctl->extra1;
 	struct inet6_dev *idev;

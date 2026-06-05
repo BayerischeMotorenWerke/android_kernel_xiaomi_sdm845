@@ -40,7 +40,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <asm/tlbflush.h>
-#include <asm/pgtable.h>
+#include <linux/pgtable.h>
 #include <linux/cpumask.h>
 #include <linux/cpu.h>
 #include <linux/vmalloc.h>
@@ -52,6 +52,7 @@
 #include <linux/zsmalloc.h>
 #include <linux/zpool.h>
 #include <linux/mount.h>
+#include <linux/pseudo_fs.h>
 #include <linux/migrate.h>
 #include <linux/wait.h>
 #include <linux/pagemap.h>
@@ -350,7 +351,7 @@ static void destroy_cache(struct zs_pool *pool)
 static unsigned long cache_alloc_handle(struct zs_pool *pool, gfp_t gfp)
 {
 	return (unsigned long)kmem_cache_alloc(pool->handle_cachep,
-			gfp & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
+			gfp & ~(__GFP_HIGHMEM|__GFP_MOVABLE|__GFP_CMA));
 }
 
 static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
@@ -361,7 +362,7 @@ static void cache_free_handle(struct zs_pool *pool, unsigned long handle)
 static struct zspage *cache_alloc_zspage(struct zs_pool *pool, gfp_t flags)
 {
 	return kmem_cache_zalloc(pool->zspage_cachep,
-			flags & ~(__GFP_HIGHMEM|__GFP_MOVABLE));
+			flags & ~(__GFP_HIGHMEM|__GFP_MOVABLE|__GFP_CMA));
 }
 
 static void cache_free_zspage(struct zs_pool *pool, struct zspage *zspage)
@@ -1850,19 +1851,14 @@ static void lock_zspage(struct zspage *zspage)
 	migrate_read_unlock(zspage);
 }
 
-static struct dentry *zs_mount(struct file_system_type *fs_type,
-				int flags, const char *dev_name, void *data)
+static int zs_init_fs_context(struct fs_context *fc)
 {
-	static const struct dentry_operations ops = {
-		.d_dname = simple_dname,
-	};
-
-	return mount_pseudo(fs_type, "zsmalloc:", NULL, &ops, ZSMALLOC_MAGIC);
+	return init_pseudo(fc, ZSMALLOC_MAGIC) ? 0 : -ENOMEM;
 }
 
 static struct file_system_type zsmalloc_fs = {
 	.name		= "zsmalloc",
-	.mount		= zs_mount,
+	.init_fs_context = zs_init_fs_context,
 	.kill_sb	= kill_anon_super,
 };
 

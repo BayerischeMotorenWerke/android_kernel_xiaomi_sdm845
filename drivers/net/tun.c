@@ -1389,7 +1389,7 @@ resample:
 
 static int tun_xdp_tx(struct net_device *dev, struct xdp_buff *xdp)
 {
-	struct xdp_frame *frame = convert_to_xdp_frame(xdp);
+	struct xdp_frame *frame = xdp_convert_buff_to_frame(xdp);
 
 	if (unlikely(!frame))
 		return -EOVERFLOW;
@@ -1725,7 +1725,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 			get_page(alloc_frag->page);
 			alloc_frag->offset += buflen;
 			err = xdp_do_redirect(tun->dev, &xdp, xdp_prog);
-			xdp_do_flush_map();
+			xdp_do_flush();
 			if (err)
 				goto err_redirect;
 			rcu_read_unlock();
@@ -1924,6 +1924,10 @@ drop:
 
 		return -EINVAL;
 	}
+
+	if (!(tun->flags & IFF_NO_PI))
+		if (pi.flags & htons(CHECKSUM_UNNECESSARY))
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	switch (tun->flags & TUN_TYPE_MASK) {
 	case IFF_TUN:
@@ -3342,7 +3346,7 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 	tfile->socket.file = file;
 	tfile->socket.ops = &tun_socket_ops;
 
-	sock_init_data(&tfile->socket, &tfile->sk);
+	sock_init_data_uid(&tfile->socket, &tfile->sk, inode->i_uid);
 
 	tfile->sk.sk_write_space = tun_sock_write_space;
 	tfile->sk.sk_sndbuf = INT_MAX;

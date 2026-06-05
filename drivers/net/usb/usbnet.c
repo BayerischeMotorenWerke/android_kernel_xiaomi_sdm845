@@ -1375,7 +1375,7 @@ netdev_tx_t usbnet_start_xmit (struct sk_buff *skb,
 	struct skb_data		*entry;
 	struct driver_info	*info = dev->driver_info;
 	unsigned long		flags;
-	int retval;
+	int retval = 0;
 
 	if (skb)
 		skb_tx_timestamp(skb);
@@ -1595,6 +1595,13 @@ static void usbnet_bh (struct timer_list *t)
 	}
 }
 
+static void usbnet_bh_tasklet(unsigned long data)
+{
+	struct timer_list *t = (struct timer_list *)data;
+
+	usbnet_bh(t);
+}
+
 
 /*-------------------------------------------------------------------------
  *
@@ -1727,7 +1734,7 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 	skb_queue_head_init (&dev->txq);
 	skb_queue_head_init (&dev->done);
 	skb_queue_head_init(&dev->rxq_pause);
-	dev->bh.func = (void (*)(unsigned long))usbnet_bh;
+	dev->bh.func = usbnet_bh_tasklet;
 	dev->bh.data = (unsigned long)&dev->delay;
 	INIT_WORK (&dev->kevent, usbnet_deferred_kevent);
 	init_usb_anchor(&dev->deferred);
@@ -2225,7 +2232,7 @@ static int __init usbnet_init(void)
 {
 	/* Compiler should optimize this out. */
 	BUILD_BUG_ON(
-		FIELD_SIZEOF(struct sk_buff, cb) < sizeof(struct skb_data));
+		sizeof_field(struct sk_buff, cb) < sizeof(struct skb_data));
 
 	return 0;
 }

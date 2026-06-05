@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 #
 # Multifunction miscellaneous devices
 #
@@ -14,7 +15,7 @@ config MFD_CS5535
 	tristate "AMD CS5535 and CS5536 southbridge core functions"
 	select MFD_CORE
 	depends on PCI && (X86_32 || (X86 && COMPILE_TEST))
-	---help---
+	help
 	  This is the core driver for CS5535/CS5536 MFD functions.  This is
           necessary for using the board's GPIO and MFGPT functionality.
 
@@ -206,7 +207,7 @@ config MFD_CROS_EC_CHARDEV
         tristate "Chrome OS Embedded Controller userspace device interface"
         depends on MFD_CROS_EC
         select CROS_EC_CTL
-        ---help---
+	help
           This driver adds support to talk with the ChromeOS EC from userspace.
 
           If you have a supported Chromebook, choose Y or M here.
@@ -266,7 +267,7 @@ config MFD_ASIC3
 	bool "Compaq ASIC3"
 	depends on GPIOLIB && ARM
 	select MFD_CORE
-	 ---help---
+	help
 	  This driver supports the ASIC3 multifunction chip found on many
 	  PDAs (mainly iPAQ and HTC based ones)
 
@@ -931,6 +932,17 @@ config MFD_PM8XXX
 	  Say M here if you want to include support for PM8xxx chips as a
 	  module. This will build a module called "pm8xxx-core".
 
+config MFD_I2C_PMIC
+	tristate "QTI I2C PMIC support"
+	depends on I2C && OF
+	select IRQ_DOMAIN
+	select REGMAP_I2C
+	help
+	  This enables support for controlling Qualcomm Technologies, Inc.
+	  PMICs over I2C. The driver controls interrupts, and provides register
+	  access for all of the device's peripherals.  Some QTI PMIC chips
+	  support communication over both I2C and SPMI.
+
 config MFD_QCOM_RPM
 	tristate "Qualcomm Resource Power Manager (RPM)"
 	depends on ARCH_QCOM && OF
@@ -1049,7 +1061,7 @@ config MFD_SI476X_CORE
 
 config MFD_SM501
 	tristate "Silicon Motion SM501"
-	 ---help---
+	help
 	  This is the core driver for the Silicon Motion SM501 multimedia
 	  companion chip. This device is a multifunction device which may
 	  provide numerous interfaces including USB host controller, USB gadget,
@@ -1060,7 +1072,7 @@ config MFD_SM501
 config MFD_SM501_GPIO
 	bool "Export GPIO via GPIO layer"
 	depends on MFD_SM501 && GPIOLIB
-	 ---help---
+	help
 	 This option uses the gpio library layer to export the 64 GPIO
 	 lines on the SM501. The platform data is used to supply the
 	 base number for the first GPIO line to register.
@@ -1613,7 +1625,7 @@ config MFD_TIMBERDALE
 	tristate "Timberdale FPGA"
 	select MFD_CORE
 	depends on PCI && GPIOLIB && (X86_32 || COMPILE_TEST)
-	---help---
+	help
 	This is the core driver for the timberdale FPGA. This device is a
 	multifunction device which exposes numerous platform devices.
 
@@ -1899,6 +1911,11 @@ config RAVE_SP_CORE
 	help
 	  Select this to get support for the Supervisory Processor
 	  device found on several devices in RAVE line of hardware.
+
+config MFD_SPK_ID
+	bool "Speaker ID platform driver"
+	help
+	  Xiaomi speaker ID driver.
 
 endmenu
 endif

@@ -64,6 +64,7 @@
 #include <linux/genetlink.h>
 #include <linux/net_namespace.h>
 #include <linux/nospec.h>
+#include <linux/btf_ids.h>
 
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
@@ -1384,6 +1385,14 @@ int netlink_has_listeners(struct sock *sk, unsigned int group)
 }
 EXPORT_SYMBOL_GPL(netlink_has_listeners);
 
+bool netlink_strict_get_check(struct sk_buff *skb)
+{
+	const struct netlink_sock *nlk = nlk_sk(NETLINK_CB(skb).sk);
+
+	return nlk->flags & NETLINK_F_STRICT_CHK;
+}
+EXPORT_SYMBOL_GPL(netlink_strict_get_check);
+
 static int netlink_broadcast_deliver(struct sock *sk, struct sk_buff *skb)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
@@ -1726,6 +1735,13 @@ static int netlink_setsockopt(struct socket *sock, int level, int optname,
 			nlk->flags &= ~NETLINK_F_EXT_ACK;
 		err = 0;
 		break;
+	case NETLINK_GET_STRICT_CHK:
+		if (val)
+			nlk->flags |= NETLINK_F_STRICT_CHK;
+		else
+			nlk->flags &= ~NETLINK_F_STRICT_CHK;
+		err = 0;
+		break;
 	default:
 		err = -ENOPROTOOPT;
 	}
@@ -1784,6 +1800,9 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 		break;
 	case NETLINK_EXT_ACK:
 		flag = NETLINK_F_EXT_ACK;
+		break;
+	case NETLINK_GET_STRICT_CHK:
+		flag = NETLINK_F_STRICT_CHK;
 		break;
 	default:
 		return -ENOPROTOOPT;
@@ -2175,6 +2194,7 @@ EXPORT_SYMBOL(__nlmsg_put);
 static int netlink_dump(struct sock *sk)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
+	struct netlink_ext_ack extack = {};
 	struct netlink_callback *cb;
 	struct sk_buff *skb = NULL;
 	unsigned int rmem, rcvbuf;
@@ -2238,8 +2258,11 @@ static int netlink_dump(struct sock *sk)
 
 	netlink_skb_set_owner_r(skb, sk);
 
-	if (nlk->dump_done_errno > 0)
+	if (nlk->dump_done_errno > 0) {
+		cb->extack = &extack;
 		nlk->dump_done_errno = cb->dump(skb, cb);
+		cb->extack = NULL;
+	}
 
 	if (nlk->dump_done_errno > 0 ||
 	    skb_tailroom(skb) < nlmsg_total_size(sizeof(nlk->dump_done_errno))) {
@@ -2253,7 +2276,8 @@ static int netlink_dump(struct sock *sk)
 	}
 
 	nlh = nlmsg_put_answer(skb, cb, NLMSG_DONE,
-			       sizeof(nlk->dump_done_errno), NLM_F_MULTI);
+			       sizeof(nlk->dump_done_errno),
+			       NLM_F_MULTI | cb->answer_flags);
 	if (WARN_ON(!nlh))
 		goto errout_skb;
 
@@ -2261,6 +2285,12 @@ static int netlink_dump(struct sock *sk)
 
 	memcpy(nlmsg_data(nlh), &nlk->dump_done_errno,
 	       sizeof(nlk->dump_done_errno));
+
+	if (extack._msg && nlk->flags & NETLINK_F_EXT_ACK) {
+		nlh->nlmsg_flags |= NLM_F_ACK_TLVS;
+		if (!nla_put_string(skb, NLMSGERR_ATTR_MSG, extack._msg))
+			nlmsg_end(skb, nlh);
+	}
 
 	if (sk_filter(sk, skb))
 		kfree_skb(skb);
@@ -2288,9 +2318,9 @@ int __netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 			 const struct nlmsghdr *nlh,
 			 struct netlink_dump_control *control)
 {
+	struct netlink_sock *nlk, *nlk2;
 	struct netlink_callback *cb;
 	struct sock *sk;
-	struct netlink_sock *nlk;
 	int ret;
 
 	refcount_inc(&skb->users);
@@ -2323,6 +2353,9 @@ int __netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 	cb->module = control->module;
 	cb->min_dump_alloc = control->min_dump_alloc;
 	cb->skb = skb;
+
+	nlk2 = nlk_sk(NETLINK_CB(skb).sk);
+	cb->strict_check = !!(nlk2->flags & NETLINK_F_STRICT_CHK);
 
 	if (control->start) {
 		ret = control->start(cb);
@@ -2608,7 +2641,7 @@ static void *netlink_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	return __netlink_seq_next(seq);
 }
 
-static void netlink_seq_stop(struct seq_file *seq, void *v)
+static void netlink_native_seq_stop(struct seq_file *seq, void *v)
 {
 	struct nl_seq_iter *iter = seq->private;
 
@@ -2619,7 +2652,7 @@ static void netlink_seq_stop(struct seq_file *seq, void *v)
 }
 
 
-static int netlink_seq_show(struct seq_file *seq, void *v)
+static int netlink_native_seq_show(struct seq_file *seq, void *v)
 {
 	if (v == SEQ_START_TOKEN) {
 		seq_puts(seq,
@@ -2645,6 +2678,68 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
 	}
 	return 0;
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+struct bpf_iter__netlink {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct netlink_sock *, sk);
+};
+
+DEFINE_BPF_ITER_FUNC(netlink, struct bpf_iter_meta *meta, struct netlink_sock *sk)
+
+static int netlink_prog_seq_show(struct bpf_prog *prog,
+				  struct bpf_iter_meta *meta,
+				  void *v)
+{
+	struct bpf_iter__netlink ctx;
+
+	meta->seq_num--;  /* skip SEQ_START_TOKEN */
+	ctx.meta = meta;
+	ctx.sk = nlk_sk((struct sock *)v);
+	return bpf_iter_run_prog(prog, &ctx);
+}
+
+static int netlink_seq_show(struct seq_file *seq, void *v)
+{
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, false);
+	if (!prog)
+		return netlink_native_seq_show(seq, v);
+
+	if (v != SEQ_START_TOKEN)
+		return netlink_prog_seq_show(prog, &meta, v);
+
+	return 0;
+}
+
+static void netlink_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	if (!v) {
+		meta.seq = seq;
+		prog = bpf_iter_get_info(&meta, true);
+		if (prog)
+			(void)netlink_prog_seq_show(prog, &meta, v);
+	}
+
+	netlink_native_seq_stop(seq, v);
+}
+#else
+static int netlink_seq_show(struct seq_file *seq, void *v)
+{
+	return netlink_native_seq_show(seq, v);
+}
+
+static void netlink_seq_stop(struct seq_file *seq, void *v)
+{
+	netlink_native_seq_stop(seq, v);
+}
+#endif
 
 static const struct seq_operations netlink_seq_ops = {
 	.start  = netlink_seq_start,
@@ -2752,6 +2847,34 @@ static const struct rhashtable_params netlink_rhashtable_params = {
 	.automatic_shrinking = true,
 };
 
+#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
+BTF_ID_LIST(btf_netlink_sock_id)
+BTF_ID(struct, netlink_sock)
+
+static const struct bpf_iter_seq_info netlink_seq_info = {
+	.seq_ops		= &netlink_seq_ops,
+	.init_seq_private	= bpf_iter_init_seq_net,
+	.fini_seq_private	= bpf_iter_fini_seq_net,
+	.seq_priv_size		= sizeof(struct nl_seq_iter),
+};
+
+static struct bpf_iter_reg netlink_reg_info = {
+	.target			= "netlink",
+	.ctx_arg_info_size	= 1,
+	.ctx_arg_info		= {
+		{ offsetof(struct bpf_iter__netlink, sk),
+		  PTR_TO_BTF_ID_OR_NULL },
+	},
+	.seq_info		= &netlink_seq_info,
+};
+
+static int __init bpf_iter_register(void)
+{
+	netlink_reg_info.ctx_arg_info[0].btf_id = *btf_netlink_sock_id;
+	return bpf_iter_reg_target(&netlink_reg_info);
+}
+#endif
+
 static int __init netlink_proto_init(void)
 {
 	int i;
@@ -2760,7 +2883,13 @@ static int __init netlink_proto_init(void)
 	if (err != 0)
 		goto out;
 
-	BUILD_BUG_ON(sizeof(struct netlink_skb_parms) > FIELD_SIZEOF(struct sk_buff, cb));
+#if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_PROC_FS)
+	err = bpf_iter_register();
+	if (err)
+		goto out;
+#endif
+
+	BUILD_BUG_ON(sizeof(struct netlink_skb_parms) > sizeof_field(struct sk_buff, cb));
 
 	nl_table = kcalloc(MAX_LINKS, sizeof(*nl_table), GFP_KERNEL);
 	if (!nl_table)
